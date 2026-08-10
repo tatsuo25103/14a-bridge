@@ -1,0 +1,117 @@
+InfiniSolar P17 Modbus RTU Write Failure Report
+================================================
+
+Test date: 2026-07-23
+Interface: RS485 Modbus RTU
+Serial settings: COM12, 19200 baud, 8 data bits, no parity, 1 stop bit
+Reported device role: inverter ID 2, parallel-system master
+
+Documented operation
+--------------------
+Register: 0x04E5 (maximum power limit to feed into the grid)
+Read: Function 03, quantity 2 registers
+Write: Function 16, quantity 2 registers, byte count 4
+Format: unsigned 32-bit, high word first
+Unit: W
+
+Reference test on inverter ID 3
+-------------------------------
+ID 3 responds normally and returns a stable value of 5000 W:
+
+TX: 03 03 04 E5 00 02 D5 2E
+RX: 03 03 04 00 00 13 88 D4 A5
+
+Decoded data: 0x00001388 = 5000 W
+
+ID 2 pre-write read
+-------------------
+TX: 02 03 04 E5 00 02 D4 FF
+RX: 02 03 04 00 00 A5 FF F2 23
+
+CRC: valid
+Decoded data: 0x0000A5FF = 42495 W
+
+The ID 2 value is not stable between reads and does not behave like a retained
+power-limit setting.
+
+ID 2 write request: 5000 W
+---------------------------
+TX: 02 10 04 E5 00 02 04 00 00 13 88 0D 0A
+
+Request decode:
+  Slave ID: 2
+  Function: 0x10 (write multiple registers)
+  Starting register: 0x04E5
+  Register quantity: 0x0002
+  Byte count: 0x04
+  Data: 0x00001388 = 5000 W
+  CRC: valid
+
+Expected standard Modbus FC16 response:
+  02 10 04 E5 00 02 51 3C
+
+Actual ID 2 response:
+  02 10 09 CA 00 04 E2 5B
+
+Actual response decode:
+  Slave ID: 2
+  Function: 0x10
+  Returned address: 0x09CA
+  Returned quantity: 0x0004
+  CRC: valid
+  This is not a Modbus exception response.
+
+The response is mathematically related to the request:
+  0x04E5 * 2 = 0x09CA
+  2 registers * 2 bytes/register = 4 bytes
+
+This appears to be an internal byte-address/byte-count representation. However,
+it is not the standard FC16 echo of address 0x04E5 and quantity 0x0002, and it
+does not prove that the documented register was updated.
+
+Delayed FC03 verification reads
+-------------------------------
+Verification 1:
+  TX: 02 03 04 E5 00 02 D4 FF
+  RX: 02 03 04 00 00 00 FF 89 73
+  CRC: valid
+  Decoded data: 0x000000FF = 255 W
+
+Verification 2:
+  TX: 02 03 04 E5 00 02 D4 FF
+  RX: 02 03 04 00 00 73 FF AC 43
+  CRC: valid
+  Decoded data: 0x000073FF = 29695 W
+
+Verification 3:
+  TX: 02 03 04 E5 00 02 D4 FF
+  RX: 02 03 04 00 00 43 FF B8 43
+  CRC: valid
+  Decoded data: 0x000043FF = 17407 W
+
+Result
+------
+FAIL.
+
+The requested value was 5000 W (0x00001388). None of the three valid FC03
+responses returned 5000 W. The read value also changed from 255 W to 29695 W
+and then 17407 W. Therefore the application cannot verify that ID 2 accepted or
+retained the write to register 0x04E5.
+
+The request format, CRC, function codes, register quantity and 32-bit encoding
+are confirmed by the successful ID 3 operation.
+
+Questions for inverter firmware / protocol RD
+---------------------------------------------
+1. Does this firmware support FC16 writes to register 0x04E5 when the inverter
+   is the parallel-system master?
+2. Why does ID 2 return address 0x09CA and quantity 0x0004 instead of echoing
+   address 0x04E5 and quantity 0x0002?
+3. Is 0x09CA/0x0004 an internal byte-addressed acknowledgement, a response from
+   a parallel gateway/controller, or a response to another transaction?
+4. Is another enable/apply register, operating mode or parallel-system command
+   required before writing 0x04E5?
+5. Why does FC03 register 0x04E5 on ID 2 return rapidly changing values ending
+   in 0xFF, while the same register on ID 3 returns a stable power value?
+6. Please provide the correct register map and write sequence for the 10/15 kW
+   firmware when operating as a parallel-system master.
