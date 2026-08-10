@@ -5,7 +5,9 @@
 V1.0.2 adds the SmartPLC automatic-OTA workflow, persistent OTA-state
 verification, an always-visible firmware version in the SmartPLC display
 header, a clear OTA status in the Windows GUI, a manual settings reload, and
-a verified circular USB-flashing progress indicator. Existing inverter,
+a verified circular USB-flashing progress indicator. During SmartPLC OTA the
+display switches to a dedicated checking, downloading, verifying, installing,
+and restarting screen with download percentage and a keep-power-on warning. Existing inverter,
 RS485, Wi-Fi, and OTA preferences remain stored in NVS across the update.
 
 For a first-time Windows installation, download and run

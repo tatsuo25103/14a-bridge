@@ -8,6 +8,9 @@ public:
     void begin();
     void service(bool safeToUpdate);
     void setSafetyCheck(std::function<bool()> check) { safetyCheck_ = check; }
+    void setProgressCallback(std::function<void(const String&, int)> callback) {
+        progressCallback_ = callback;
+    }
 
     bool saveWifiHex(const String& ssidHex, const String& passwordHex,
                      String& detail);
@@ -37,6 +40,8 @@ private:
     bool automatic_ = false;
     uint32_t nextAutomaticCheckMs_ = 0;
     std::function<bool()> safetyCheck_;
+    std::function<void(const String&, int)> progressCallback_;
+    void reportProgress(const String& stage, int percent = -1);
     void load();
     bool save();
     bool fetchManifest(Manifest& manifest, String& detail);
