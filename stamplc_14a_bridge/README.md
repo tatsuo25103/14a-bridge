@@ -1,16 +1,18 @@
 # 14a Bridge
 
-## V1.0.0 release
+## V1.0.1 release
 
 For a first-time Windows installation, download and run
-`14a_Bridge_Setup_V1.0.0.exe` from the GitHub release. The installer
+`14a_Bridge_Setup_V1.0.1.exe` from the GitHub release. The installer
 uses the MES icon, installs the USB Configurator, the current StampPLC
 firmware, and a self-contained ESP32-S3 flasher. No Python, PlatformIO, or
 development tools are required on the customer's computer.
 
-To program a new StampPLC: connect it by USB, start the configurator, select
-its COM port, and click **Flash firmware**. This erases and replaces only the
-controller firmware; it does not write any inverter over RS485.
+To program a new StampPLC, or upgrade V1.0.0 to the OTA partition layout:
+connect it by USB, start the configurator, select its COM port, open
+**Settings**, and click **USB flash V1.0.1**. This writes the controller
+firmware and OTA partition table; it does not write any inverter over RS485.
+The NVS addresses are unchanged so existing inverter settings are retained.
 
 Firmware for using an M5Stack StampPLC between a ripple-control receiver
 (`Rundsteuerempfänger`, RSE) and up to six P17/InfiniSolar inverters.
@@ -133,7 +135,14 @@ Example for ID 3 with a 10,000 W maximum:
   and bubbles animate at approximately 30 FPS without changing Modbus timing.
 - Onboard RTC time, RGB alarm, and buzzer.
 - Safe dry-run default.
-- No Wi-Fi, cloud connection, or other network service.
+- Optional Wi-Fi station mode used only for time synchronization and GitHub
+  Release OTA. No access point or inbound network service is opened.
+- Two 3 MB application slots permit future firmware updates without USB.
+  Firmware is downloaded over certificate-validated HTTPS and accepted only
+  when its SHA-256 matches the release manifest.
+- Automatic OTA is off by default. When enabled in the GUI, the controller
+  checks after startup and every 24 hours. Installation starts only while the
+  RSE state is valid and Modbus control is idle.
 
 ## Build and flash
 
@@ -164,7 +173,7 @@ For development, the equivalent Python source version can be run with:
 .\.venv\Scripts\python.exe .\stamplc_14a_bridge\tools\stamplc_usb_gui.py
 ```
 
-The GUI can:
+The GUI is divided into **Settings** and **Commissioning** tabs. It can:
 
 - scan and connect to the StampPLC COM port;
 - read the current RSE state and saved configuration;
@@ -173,6 +182,9 @@ The GUI can:
 - set each inverter's maximum PV power;
 - configure RS485 baud and the power-limit register;
 - synchronize the StampPLC RTC from the PC;
+- install the bundled V1.0.1 firmware over USB;
+- save Wi-Fi credentials and show connection/IP/RSSI state;
+- check or install GitHub OTA releases and enable/disable automatic OTA;
 - switch between dry-run and live control with confirmation;
 - test 100%, 60%, 30%, and 0%;
 - reapply the level currently selected by the RSE;
@@ -183,6 +195,19 @@ used as a fallback. Enter `help` to list commands and `show` to read all
 settings. Use `probe all` to read register `0x04E5` from every enabled ID, or
 `probe 3` to read only ID 3. Probe commands never write an inverter value.
 Successful setting commands are saved immediately to NVS.
+
+## OTA release assets
+
+Every OTA-capable GitHub release must contain these two assets:
+
+- `14a_bridge_firmware.bin`
+- `ota_manifest.json`
+
+The manifest contains the semantic version, the version-specific release URL,
+and the lowercase SHA-256 of the firmware. V1.0.0 must first be upgraded once
+through the GUI's USB flash button because it has no Wi-Fi/OTA update client;
+V1.0.1 also installs the larger 3 MB-per-slot partition layout used by future
+releases.
 
 ## Commissioning sequence
 

@@ -14,7 +14,7 @@ namespace StampPlcRseConfigurator
 {
     internal sealed class MainForm : Form
     {
-        private const string ReleaseVersion = "V1.0.0";
+        private const string ReleaseVersion = "V1.0.1";
         private static readonly Color Surface = Color.FromArgb(16, 22, 30);
         private static readonly Color Panel = Color.FromArgb(25, 34, 45);
         private static readonly Color Accent = Color.FromArgb(0, 220, 210);
@@ -30,6 +30,11 @@ namespace StampPlcRseConfigurator
         private readonly DataGridView _grid = new DataGridView();
         private readonly TextBox _baud = new TextBox();
         private readonly TextBox _register = new TextBox();
+        private readonly TextBox _wifiSsid = new TextBox();
+        private readonly TextBox _wifiPassword = new TextBox();
+        private readonly CheckBox _automaticOta = new CheckBox();
+        private readonly Label _wifiStatus = new Label();
+        private readonly Label _firmwareStatus = new Label();
         private readonly TextBox _log = new TextBox();
         private readonly FlowLayoutPanel _gaugeFlow = new FlowLayoutPanel();
         private readonly LiquidGauge[] _gauges = new LiquidGauge[6];
@@ -44,6 +49,7 @@ namespace StampPlcRseConfigurator
         private bool? _dryRun;
         private volatile bool _savingSettings;
         private volatile bool _flashingFirmware;
+        private bool _updatingWifiUi;
 
         private static readonly Regex RsePattern = new Regex(
             @"^RSE DI mask:\s*(0x[0-9A-Fa-f]+)\s+level:\s*(\d+%|INVALID)$");
@@ -57,6 +63,10 @@ namespace StampPlcRseConfigurator
             @"^SCAN ID=([1-6]) VALUE=(\d+) STATUS=(FOUND|NO_RESPONSE|ERROR) DETAIL=(.*)$");
         private static readonly Regex CommitPattern = new Regex(
             @"^COMMIT ID=([1-6]) STATUS=(OK|CLAMPED|PENDING|ERROR) CONFIG=(\d+) DETAIL=(.*)$");
+        private static readonly Regex WifiPattern = new Regex(
+            @"^WIFI VERSION=([^\s]+) SAVED=(yes|no) CONNECTED=(yes|no) AUTO=(yes|no) SSIDHEX=([^\s]*) IP=([^\s]+) RSSI=(-?\d+)$");
+        private static readonly Regex OtaPattern = new Regex(
+            @"^OTA STATUS=(OK|ERROR|REBOOT) CURRENT=([^\s]+) AVAILABLE=([^\s]+) DETAIL=(.*)$");
 
         internal MainForm()
         {
@@ -83,15 +93,12 @@ namespace StampPlcRseConfigurator
                 Dock = DockStyle.Fill,
                 Padding = new Padding(10),
                 ColumnCount = 1,
-                RowCount = 4,
+                RowCount = 3,
                 AutoScroll = false
             };
-            // Compact desktop layout: live display at left, settings and
-            // testing at right, then the event log below.
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 190));
             Controls.Add(root);
 
             root.Controls.Add(BuildHeader());
@@ -121,24 +128,119 @@ namespace StampPlcRseConfigurator
             _connection.Padding = new Padding(14, 5, 0, 0);
             _connection.Text = "\u25CF  DISCONNECTED";
             _connection.ForeColor = Muted;
-            _flashFirmware.Text = "Flash firmware";
-            StyleButton(_flashFirmware);
-            _flashFirmware.AutoSize = false;
-            _flashFirmware.Size = new Size(116, 26);
-            _flashFirmware.Margin = new Padding(8, 0, 0, 0);
-            _flashFirmware.Click += FlashFirmware;
-            connectionFlow.Controls.AddRange(new Control[] { _ports, scan, _connect, _flashFirmware, _connection });
+            connectionFlow.Controls.AddRange(new Control[] { _ports, scan, _connect, _connection });
             connectionBox.Controls.Add(connectionFlow);
             root.Controls.Add(connectionBox);
 
-            var workspace = new TableLayoutPanel
+            var tabs = new TabControl
             {
-                Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1,
-                Padding = new Padding(0, 2, 0, 2)
+                Name = "MainTabs",
+                Dock = DockStyle.Fill, Appearance = TabAppearance.FlatButtons,
+                DrawMode = TabDrawMode.OwnerDrawFixed, ItemSize = new Size(150, 34),
+                SizeMode = TabSizeMode.Fixed, Padding = new Point(16, 6)
             };
-            workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 44));
-            workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 56));
-            root.Controls.Add(workspace);
+            tabs.DrawItem += delegate(object sender, DrawItemEventArgs e)
+            {
+                TabPage page = tabs.TabPages[e.Index];
+                bool selected = tabs.SelectedIndex == e.Index;
+                using (var background = new SolidBrush(selected ? Color.FromArgb(18, 70, 78) : Panel))
+                using (var textBrush = new SolidBrush(selected ? Color.White : Muted))
+                using (var tabFont = new Font("Segoe UI Semibold", 10F))
+                using (var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+                {
+                    e.Graphics.FillRectangle(background, e.Bounds);
+                    e.Graphics.DrawString(page.Text, tabFont, textBrush, e.Bounds, format);
+                }
+            };
+            var settingsPage = new TabPage("SETTINGS") { BackColor = Surface, Padding = new Padding(4) };
+            var debugPage = new TabPage("COMMISSIONING") { BackColor = Surface, Padding = new Padding(4) };
+            tabs.TabPages.AddRange(new[] { settingsPage, debugPage });
+            root.Controls.Add(tabs);
+
+            var settingsLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+            settingsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            settingsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 112));
+            settingsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 96));
+            settingsPage.Controls.Add(settingsLayout);
+
+            var configurationBox = NewGroup("Inverter & RS485 settings  |  saved in StampPLC");
+            var configurationLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
+            configurationLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            configurationLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+            ConfigureGrid();
+            configurationLayout.Controls.Add(_grid, 0, 0);
+            var settingsFlow = NewFlow();
+            _baud.Width = 90;
+            _baud.Text = "19200";
+            StyleTextBox(_baud);
+            _register.Width = 90;
+            _register.Text = "0x04E5";
+            StyleTextBox(_register);
+            settingsFlow.Controls.AddRange(new Control[]
+            {
+                NewTextLabel("RS485 baud"), _baud,
+                NewTextLabel("Power register"), _register,
+                NewButton("Save inverter settings", SaveAll),
+                NewTextLabel("Offline inverter settings remain pending")
+            });
+            configurationLayout.Controls.Add(settingsFlow, 0, 1);
+            configurationBox.Controls.Add(configurationLayout);
+            settingsLayout.Controls.Add(configurationBox, 0, 0);
+
+            var wifiBox = NewGroup("Wi-Fi & automatic OTA");
+            var wifiFlow = NewFlow();
+            wifiFlow.Padding = new Padding(0, 5, 0, 0);
+            _wifiSsid.Width = 170;
+            _wifiPassword.Width = 160;
+            _wifiPassword.UseSystemPasswordChar = true;
+            StyleTextBox(_wifiSsid);
+            StyleTextBox(_wifiPassword);
+            _automaticOta.Text = "Automatic OTA updates";
+            _automaticOta.AutoSize = true;
+            _automaticOta.ForeColor = TextColor;
+            _automaticOta.Padding = new Padding(8, 5, 4, 0);
+            _automaticOta.CheckedChanged += AutomaticOtaChanged;
+            _wifiStatus.Text = "Not read";
+            _wifiStatus.AutoSize = true;
+            _wifiStatus.ForeColor = Muted;
+            _wifiStatus.Padding = new Padding(10, 7, 0, 0);
+            wifiFlow.Controls.AddRange(new Control[]
+            {
+                NewTextLabel("SSID"), _wifiSsid,
+                NewTextLabel("Password"), _wifiPassword,
+                NewButton("Save & connect", SaveWifi),
+                NewButton("Retry connection", delegate { Send("wifi connect"); }),
+                _automaticOta, _wifiStatus
+            });
+            wifiBox.Controls.Add(wifiFlow);
+            settingsLayout.Controls.Add(wifiBox, 0, 1);
+
+            var firmwareBox = NewGroup("Firmware update");
+            var firmwareFlow = NewFlow();
+            firmwareFlow.Padding = new Padding(0, 5, 0, 0);
+            _flashFirmware.Text = "USB flash V1.0.1";
+            StyleButton(_flashFirmware);
+            _flashFirmware.AutoSize = true;
+            _flashFirmware.Click += FlashFirmware;
+            _firmwareStatus.Text = "Installed firmware: --";
+            _firmwareStatus.AutoSize = true;
+            _firmwareStatus.ForeColor = Muted;
+            _firmwareStatus.Padding = new Padding(12, 7, 0, 0);
+            firmwareFlow.Controls.AddRange(new Control[]
+            {
+                _flashFirmware,
+                NewButton("Check OTA update", delegate { Send("ota check"); }),
+                NewButton("Install OTA now", InstallOta),
+                _firmwareStatus
+            });
+            firmwareBox.Controls.Add(firmwareFlow);
+            settingsLayout.Controls.Add(firmwareBox, 0, 2);
+
+            var debugLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+            debugLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 56));
+            debugLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
+            debugLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 44));
+            debugPage.Controls.Add(debugLayout);
 
             var displayBox = NewGroup("Live display  |  RES dashed / inverter readback filled");
             var displayLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
@@ -168,40 +270,7 @@ namespace StampPlcRseConfigurator
             }
             displayLayout.Controls.Add(_gaugeFlow, 0, 1);
             displayBox.Controls.Add(displayLayout);
-            workspace.Controls.Add(displayBox, 0, 0);
-
-            var rightWorkArea = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2,
-                Padding = new Padding(6, 0, 0, 0)
-            };
-            rightWorkArea.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            rightWorkArea.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
-            workspace.Controls.Add(rightWorkArea, 1, 0);
-
-            var configurationBox = NewGroup("Configuration  |  saved in StampPLC");
-            var configurationLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
-            configurationLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            configurationLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
-            ConfigureGrid();
-            configurationLayout.Controls.Add(_grid, 0, 0);
-            var settingsFlow = NewFlow();
-            _baud.Width = 90;
-            _baud.Text = "19200";
-            StyleTextBox(_baud);
-            _register.Width = 90;
-            _register.Text = "0x04E5";
-            StyleTextBox(_register);
-            settingsFlow.Controls.AddRange(new Control[]
-            {
-                NewTextLabel("RS485 baud"), _baud,
-                NewTextLabel("Power register"), _register,
-                NewButton("Save all settings", SaveAll),
-                NewTextLabel("Offline inverter: settings stay saved as PENDING")
-            });
-            configurationLayout.Controls.Add(settingsFlow, 0, 1);
-            configurationBox.Controls.Add(configurationLayout);
-            rightWorkArea.Controls.Add(configurationBox, 0, 0);
+            debugLayout.Controls.Add(displayBox, 0, 0);
 
             var actionBox = NewGroup("Test & commissioning");
             var actionFlow = NewFlow();
@@ -215,7 +284,7 @@ namespace StampPlcRseConfigurator
             }
             actionFlow.Controls.Add(NewButton("Enable LIVE", EnableLive));
             actionBox.Controls.Add(actionFlow);
-            rightWorkArea.Controls.Add(actionBox, 0, 1);
+            debugLayout.Controls.Add(actionBox, 0, 1);
 
             var logBox = NewGroup("Device event log");
             logBox.MinimumSize = new Size(0, 100);
@@ -229,7 +298,7 @@ namespace StampPlcRseConfigurator
             _log.ForeColor = Color.FromArgb(160, 240, 230);
             _log.BorderStyle = BorderStyle.FixedSingle;
             logBox.Controls.Add(_log);
-            root.Controls.Add(logBox);
+            debugLayout.Controls.Add(logBox, 0, 2);
         }
 
         private void ConfigureGrid()
@@ -646,6 +715,84 @@ namespace StampPlcRseConfigurator
             Send("time " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
         }
 
+        private static string Utf8Hex(string value)
+        {
+            byte[] bytes = Encoding.UTF8.GetBytes(value);
+            var result = new StringBuilder(bytes.Length * 2);
+            foreach (byte valueByte in bytes) result.Append(valueByte.ToString("X2", CultureInfo.InvariantCulture));
+            return result.ToString();
+        }
+
+        private static string HexUtf8(string value)
+        {
+            if ((value.Length & 1) != 0) return "";
+            try
+            {
+                byte[] bytes = new byte[value.Length / 2];
+                for (int i = 0; i < bytes.Length; ++i)
+                    bytes[i] = byte.Parse(value.Substring(i * 2, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+                return Encoding.UTF8.GetString(bytes);
+            }
+            catch { return ""; }
+        }
+
+        private void SaveWifi(object sender, EventArgs e)
+        {
+            string ssid = _wifiSsid.Text;
+            string password = _wifiPassword.Text;
+            int ssidBytes = Encoding.UTF8.GetByteCount(ssid);
+            int passwordBytes = Encoding.UTF8.GetByteCount(password);
+            if (ssidBytes < 1 || ssidBytes > 32)
+            {
+                MessageBox.Show(this, "Wi-Fi SSID must contain 1 to 32 bytes.", "Invalid Wi-Fi setting",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (passwordBytes != 0 && (passwordBytes < 8 || passwordBytes > 63))
+            {
+                MessageBox.Show(this, "Wi-Fi password must be empty for an open network, or contain 8 to 63 bytes.",
+                    "Invalid Wi-Fi setting", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            string passwordHex = passwordBytes == 0 ? "-" : Utf8Hex(password);
+            if (Send("wifi sethex " + Utf8Hex(ssid) + " " + passwordHex))
+            {
+                _wifiStatus.Text = "Connecting to " + ssid + "...";
+                var timer = new System.Windows.Forms.Timer { Interval = 2500 };
+                timer.Tick += delegate { timer.Stop(); timer.Dispose(); Send("wifi show"); };
+                timer.Start();
+            }
+        }
+
+        private void AutomaticOtaChanged(object sender, EventArgs e)
+        {
+            if (_updatingWifiUi) return;
+            if (_automaticOta.Checked)
+            {
+                if (MessageBox.Show(this,
+                    "When enabled, StampPLC checks GitHub once after startup and every 24 hours. " +
+                    "An update is installed only while Wi-Fi is connected, the RSE input is valid, and Modbus control is idle. Continue?",
+                    "Enable automatic OTA", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                {
+                    _updatingWifiUi = true;
+                    _automaticOta.Checked = false;
+                    _updatingWifiUi = false;
+                    return;
+                }
+            }
+            Send("ota auto " + (_automaticOta.Checked ? "on" : "off"));
+        }
+
+        private void InstallOta(object sender, EventArgs e)
+        {
+            if (MessageBox.Show(this,
+                "Download and install the latest firmware from the official GitHub release?\r\n\r\n" +
+                "Keep the StampPLC powered. The controller will reboot when verification succeeds.",
+                "Install OTA update", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            _firmwareStatus.Text = "OTA update in progress...";
+            Send("ota update CONFIRM");
+        }
+
         private void EnableLive(object sender, EventArgs e)
         {
             if (MessageBox.Show(this,
@@ -728,6 +875,33 @@ namespace StampPlcRseConfigurator
                 _register.Text = match.Groups[3].Value.ToUpperInvariant();
                 return;
             }
+            match = WifiPattern.Match(line.Trim());
+            if (match.Success)
+            {
+                string version = match.Groups[1].Value;
+                bool saved = match.Groups[2].Value == "yes";
+                bool connected = match.Groups[3].Value == "yes";
+                bool automatic = match.Groups[4].Value == "yes";
+                string ssid = HexUtf8(match.Groups[5].Value);
+                if (!_wifiSsid.Focused && saved) _wifiSsid.Text = ssid;
+                _updatingWifiUi = true;
+                _automaticOta.Checked = automatic;
+                _updatingWifiUi = false;
+                _firmwareStatus.Text = "Installed firmware: V" + version;
+                _wifiStatus.Text = connected
+                    ? "Connected: " + ssid + "  |  " + match.Groups[6].Value + "  |  " + match.Groups[7].Value + " dBm"
+                    : (saved ? "Saved: " + ssid + "  |  not connected" : "No Wi-Fi saved");
+                _wifiStatus.ForeColor = connected ? Accent : Color.FromArgb(255, 184, 55);
+                return;
+            }
+            match = OtaPattern.Match(line.Trim());
+            if (match.Success)
+            {
+                _firmwareStatus.Text = "Installed V" + match.Groups[2].Value +
+                    "  |  Available " + match.Groups[3].Value + "  |  " + match.Groups[4].Value;
+                _firmwareStatus.ForeColor = match.Groups[1].Value == "ERROR" ? Color.OrangeRed : Accent;
+                return;
+            }
             match = IdPattern.Match(line.Trim());
             if (match.Success)
             {
@@ -793,6 +967,16 @@ namespace StampPlcRseConfigurator
             }
             if (line.StartsWith("PROBE SUMMARY") || line.StartsWith("SCAN SUMMARY")) _result.Text = line;
             if (line.StartsWith("Last result:")) _result.Text = line;
+            if (line.StartsWith("WIFI STATUS="))
+            {
+                _wifiStatus.Text = line;
+                _wifiStatus.ForeColor = line.Contains("ERROR") ? Color.OrangeRed : Accent;
+            }
+            if (line.StartsWith("OTA "))
+            {
+                _firmwareStatus.Text = line;
+                _firmwareStatus.ForeColor = line.Contains("ERROR") ? Color.OrangeRed : Accent;
+            }
         }
 
         private void UpdateGauges()
@@ -827,7 +1011,8 @@ namespace StampPlcRseConfigurator
             return RsePattern.IsMatch("RSE DI mask: 0x02  level: 60%") &&
                    ModePattern.IsMatch("Mode: DRY-RUN  RS485: 19200 baud  register: 0x04E5  quantity: 2") &&
                    IdPattern.IsMatch("3   yes        10000  10000   6000   3000      0     6000      6000  yes") &&
-                   ProbePattern.IsMatch("PROBE ID=3 REGISTER=0x04E5 VALUE=10000 STATUS=OK DETAIL=readback verified");
+                   ProbePattern.IsMatch("PROBE ID=3 REGISTER=0x04E5 VALUE=10000 STATUS=OK DETAIL=readback verified") &&
+                   WifiPattern.IsMatch("WIFI VERSION=1.0.1 SAVED=yes CONNECTED=yes AUTO=no SSIDHEX=4D4553 IP=192.168.1.2 RSSI=-52");
         }
     }
 
@@ -964,6 +1149,26 @@ namespace StampPlcRseConfigurator
             if (args.Length == 1 && args[0] == "--ui-self-test")
             {
                 using (var form = new MainForm()) form.CreateControl();
+                return 0;
+            }
+            if (args.Length == 2 && (args[0] == "--render-ui" || args[0] == "--render-ui-debug"))
+            {
+                using (var form = new MainForm())
+                {
+                    form.Show();
+                    Application.DoEvents();
+                    if (args[0] == "--render-ui-debug")
+                    {
+                        Control[] tabs = form.Controls.Find("MainTabs", true);
+                        if (tabs.Length == 1) ((TabControl)tabs[0]).SelectedIndex = 1;
+                        Application.DoEvents();
+                    }
+                    using (var bitmap = new Bitmap(form.Width, form.Height))
+                    {
+                        form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size));
+                        bitmap.Save(args[1]);
+                    }
+                }
                 return 0;
             }
             Application.Run(new MainForm());

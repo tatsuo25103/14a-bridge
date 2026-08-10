@@ -7,6 +7,7 @@
 #include "AppConfig.h"
 #include "EventLog.h"
 #include "ModbusRtuMaster.h"
+#include "OtaManager.h"
 
 namespace {
 constexpr int8_t RS485_TX = 0;
@@ -402,6 +403,13 @@ void printHelp() {
     Serial.println("  dryrun off CONFIRM           Enable live inverter control");
     Serial.println("  baud <rate>                  Set RS485 baud rate");
     Serial.println("  reg <hex|decimal>             Set power-limit register");
+    Serial.println("  wifi show                     Show Wi-Fi and OTA state");
+    Serial.println("  wifi sethex <ssid> <password> Save UTF-8 values encoded as hexadecimal");
+    Serial.println("  wifi connect                  Start/retry Wi-Fi connection");
+    Serial.println("  wifi clear CONFIRM            Erase saved Wi-Fi credentials");
+    Serial.println("  ota auto <on|off>             Enable/disable automatic OTA updates");
+    Serial.println("  ota check                     Check the latest GitHub release");
+    Serial.println("  ota update CONFIRM            Verify and install the latest firmware");
     Serial.println("  reset CONFIRM                Erase saved configuration and reboot");
     Serial.println("  help                         Show this help");
     Serial.println("All successful setting commands are saved automatically.");
@@ -419,6 +427,11 @@ void printStatus() {
                   config.dryRun ? "DRY-RUN" : "LIVE",
                   config.modbusBaud, config.modbusRegister,
                   config.modbusQuantity);
+    Serial.printf("Firmware: %s  WiFi saved: %s connected: %s auto OTA: %s IP: %s RSSI: %ld\r\n",
+                  APP_VERSION, otaManager.hasCredentials() ? "yes" : "no",
+                  otaManager.connected() ? "yes" : "no",
+                  otaManager.automatic() ? "yes" : "no",
+                  otaManager.ipAddress().c_str(), static_cast<long>(otaManager.rssi()));
     Serial.println("ID  Enabled  MaxPV(W)  100%    60%    30%     0%  LastReq  Readback  OK");
     for (uint8_t i = 0; i < INVERTER_COUNT; ++i) {
         const uint32_t maximum = config.inverters[i].maxPvPowerW;
@@ -445,6 +458,12 @@ void printGuiStatus() {
     Serial.printf("@ Mode: %s  RS485: %lu baud  register: 0x%04X  quantity: %u\r\n",
                   config.dryRun ? "DRY-RUN" : "LIVE", config.modbusBaud,
                   config.modbusRegister, config.modbusQuantity);
+    Serial.printf("@ WIFI VERSION=%s SAVED=%s CONNECTED=%s AUTO=%s SSIDHEX=%s IP=%s RSSI=%ld\r\n",
+                  APP_VERSION, otaManager.hasCredentials() ? "yes" : "no",
+                  otaManager.connected() ? "yes" : "no",
+                  otaManager.automatic() ? "yes" : "no",
+                  otaManager.ssidHex().c_str(), otaManager.ipAddress().c_str(),
+                  static_cast<long>(otaManager.rssi()));
     for (uint8_t i = 0; i < INVERTER_COUNT; ++i) {
         const uint32_t maximum = config.inverters[i].maxPvPowerW;
         const bool statusOk = inverterHealthy[i] &&
@@ -488,6 +507,69 @@ void processUsbCommand(String line) {
     }
     if (line.equalsIgnoreCase("gui")) {
         printGuiStatus();
+        return;
+    }
+
+    if (line.equalsIgnoreCase("wifi show")) {
+        Serial.printf("WIFI VERSION=%s SAVED=%s CONNECTED=%s AUTO=%s SSIDHEX=%s IP=%s RSSI=%ld\r\n",
+                      APP_VERSION, otaManager.hasCredentials() ? "yes" : "no",
+                      otaManager.connected() ? "yes" : "no",
+                      otaManager.automatic() ? "yes" : "no",
+                      otaManager.ssidHex().c_str(), otaManager.ipAddress().c_str(),
+                      static_cast<long>(otaManager.rssi()));
+        return;
+    }
+    if (line.startsWith("wifi sethex ")) {
+        const int split = line.indexOf(' ', 12);
+        if (split < 0) {
+            Serial.println("WIFI STATUS=ERROR DETAIL=use: wifi sethex <ssid-hex> <password-hex-or-dash>");
+            return;
+        }
+        const String ssidHex = line.substring(12, split);
+        String passwordHex = line.substring(split + 1);
+        if (passwordHex == "-") passwordHex = "";
+        String detail;
+        const bool ok = otaManager.saveWifiHex(ssidHex, passwordHex, detail);
+        Serial.printf("WIFI STATUS=%s DETAIL=%s\r\n", ok ? "OK" : "ERROR", detail.c_str());
+        return;
+    }
+    if (line.equalsIgnoreCase("wifi connect")) {
+        if (!otaManager.hasCredentials()) {
+            Serial.println("WIFI STATUS=ERROR DETAIL=no saved credentials");
+        } else {
+            otaManager.connectNow();
+            Serial.println("WIFI STATUS=CONNECTING DETAIL=connection started");
+        }
+        return;
+    }
+    if (line.equalsIgnoreCase("wifi clear CONFIRM")) {
+        Serial.printf("WIFI STATUS=%s DETAIL=credentials cleared\r\n",
+                      otaManager.clearWifi() ? "OK" : "ERROR");
+        return;
+    }
+    if (line.equalsIgnoreCase("ota auto on") || line.equalsIgnoreCase("ota auto off")) {
+        const bool enabled = line.equalsIgnoreCase("ota auto on");
+        otaManager.setAutomatic(enabled);
+        Serial.printf("OTA AUTO=%s STATUS=OK\r\n", enabled ? "yes" : "no");
+        return;
+    }
+    if (line.equalsIgnoreCase("ota check")) {
+        String version;
+        String detail;
+        const bool ok = otaManager.checkForUpdate(version, detail);
+        Serial.printf("OTA STATUS=%s CURRENT=%s AVAILABLE=%s DETAIL=%s\r\n",
+                      ok ? "OK" : "ERROR", APP_VERSION,
+                      version.isEmpty() ? "-" : version.c_str(), detail.c_str());
+        return;
+    }
+    if (line.equalsIgnoreCase("ota update CONFIRM")) {
+        if (activePercent < 0 || applyInProgress) {
+            Serial.println("OTA STATUS=ERROR DETAIL=RSE state must be valid and Modbus control idle");
+            return;
+        }
+        String detail;
+        const bool ok = otaManager.installUpdate(detail);
+        Serial.printf("OTA STATUS=%s DETAIL=%s\r\n", ok ? "OK" : "ERROR", detail.c_str());
         return;
     }
 
@@ -764,7 +846,7 @@ void serviceUsb() {
             }
         } else if (c == '\b' || c == 0x7F) {
             if (!usbLine.isEmpty()) usbLine.remove(usbLine.length() - 1);
-        } else if (c >= 32 && c <= 126 && usbLine.length() < 127) {
+        } else if (c >= 32 && c <= 126 && usbLine.length() < 319) {
             usbLine += c;
         }
     }
@@ -1180,11 +1262,15 @@ void setup() {
     M5StamPLC.config(boardConfig);
     M5StamPLC.begin();
     M5StamPLC.setBacklight(true);
+    otaManager.begin();
 
     eventLog.begin();
     rawRseMask = readRseMask();
     stableRseMask = rawRseMask;
     rawChangedAt = millis();
+    otaManager.setSafetyCheck([] {
+        return !applyInProgress && readRseMask() == stableRseMask;
+    });
     recordSystem("boot", "firmware started");
     // Read the actual inverter state before evaluating or applying the RSE
     // command. This is always FC03-only, including when LIVE was saved.
@@ -1211,6 +1297,8 @@ void loop() {
     // The round-robin FC03 poll below is the only periodic inverter access:
     // one enabled ID every two seconds, read-only, and never an auto-write.
     pollNextEnabledInverter();
+    otaManager.service(activePercent >= 0 && !applyInProgress &&
+                       millis() - rawChangedAt >= config.debounceMs + 2000);
     updateDisplay();
     delay(2);
 }
