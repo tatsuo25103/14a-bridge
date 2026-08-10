@@ -5,16 +5,100 @@ using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.IO;
 using System.IO.Ports;
+using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace StampPlcRseConfigurator
 {
+    internal sealed class TechCircularProgress : Control
+    {
+        private readonly System.Windows.Forms.Timer _spinner = new System.Windows.Forms.Timer { Interval = 35 };
+        private int _value;
+        private float _rotation = -90F;
+        private bool _indeterminate;
+        private Color _ringColor = Color.FromArgb(0, 220, 210);
+
+        internal TechCircularProgress()
+        {
+            DoubleBuffered = true;
+            SetStyle(ControlStyles.ResizeRedraw | ControlStyles.UserPaint |
+                ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
+                ControlStyles.SupportsTransparentBackColor, true);
+            Size = new Size(52, 52);
+            BackColor = Color.Transparent;
+            _spinner.Tick += delegate
+            {
+                _rotation = (_rotation + 10F) % 360F;
+                Invalidate();
+            };
+        }
+
+        internal int Value
+        {
+            get { return _value; }
+            set { _value = Math.Max(0, Math.Min(100, value)); Invalidate(); }
+        }
+
+        internal bool Indeterminate
+        {
+            get { return _indeterminate; }
+            set
+            {
+                _indeterminate = value;
+                if (value) _spinner.Start(); else _spinner.Stop();
+                Invalidate();
+            }
+        }
+
+        internal Color RingColor
+        {
+            get { return _ringColor; }
+            set { _ringColor = value; Invalidate(); }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) _spinner.Dispose();
+            base.Dispose(disposing);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            RectangleF ring = new RectangleF(6, 6, Width - 13, Height - 13);
+            using (var track = new Pen(Color.FromArgb(58, 78, 92), 4F))
+                e.Graphics.DrawEllipse(track, ring);
+
+            float start = _indeterminate ? _rotation : -90F;
+            float sweep = _indeterminate ? 105F : 360F * _value / 100F;
+            if (sweep > 0F)
+            {
+                using (var glow = new Pen(Color.FromArgb(55, _ringColor), 8F))
+                using (var arc = new Pen(_ringColor, 4F))
+                {
+                    glow.StartCap = glow.EndCap = LineCap.Round;
+                    arc.StartCap = arc.EndCap = LineCap.Round;
+                    e.Graphics.DrawArc(glow, ring, start, sweep);
+                    e.Graphics.DrawArc(arc, ring, start, sweep);
+                }
+            }
+
+            string center = _indeterminate ? "..." : _value + "%";
+            using (var font = new Font("Segoe UI Semibold", _value == 100 ? 8F : 8.5F))
+            using (var brush = new SolidBrush(Color.FromArgb(230, 242, 245)))
+            using (var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+                e.Graphics.DrawString(center, font, brush, ClientRectangle, format);
+        }
+    }
+
     internal sealed class MainForm : Form
     {
-        private const string ReleaseVersion = "V1.0.1";
+        private const string ReleaseVersion = "V1.0.2";
         private static readonly Color Surface = Color.FromArgb(16, 22, 30);
         private static readonly Color Panel = Color.FromArgb(25, 34, 45);
         private static readonly Color Accent = Color.FromArgb(0, 220, 210);
@@ -30,11 +114,14 @@ namespace StampPlcRseConfigurator
         private readonly DataGridView _grid = new DataGridView();
         private readonly TextBox _baud = new TextBox();
         private readonly TextBox _register = new TextBox();
-        private readonly TextBox _wifiSsid = new TextBox();
+        private readonly ComboBox _wifiSsid = new ComboBox();
         private readonly TextBox _wifiPassword = new TextBox();
         private readonly CheckBox _automaticOta = new CheckBox();
+        private readonly Label _automaticOtaStatus = new Label();
         private readonly Label _wifiStatus = new Label();
         private readonly Label _firmwareStatus = new Label();
+        private readonly TechCircularProgress _flashProgress = new TechCircularProgress();
+        private readonly Label _flashProgressText = new Label();
         private readonly TextBox _log = new TextBox();
         private readonly FlowLayoutPanel _gaugeFlow = new FlowLayoutPanel();
         private readonly LiquidGauge[] _gauges = new LiquidGauge[6];
@@ -50,6 +137,7 @@ namespace StampPlcRseConfigurator
         private volatile bool _savingSettings;
         private volatile bool _flashingFirmware;
         private bool _updatingWifiUi;
+        private bool? _pendingAutomaticOta;
 
         private static readonly Regex RsePattern = new Regex(
             @"^RSE DI mask:\s*(0x[0-9A-Fa-f]+)\s+level:\s*(\d+%|INVALID)$");
@@ -67,6 +155,8 @@ namespace StampPlcRseConfigurator
             @"^WIFI VERSION=([^\s]+) SAVED=(yes|no) CONNECTED=(yes|no) AUTO=(yes|no) SSIDHEX=([^\s]*) IP=([^\s]+) RSSI=(-?\d+)$");
         private static readonly Regex OtaPattern = new Regex(
             @"^OTA STATUS=(OK|ERROR|REBOOT) CURRENT=([^\s]+) AVAILABLE=([^\s]+) DETAIL=(.*)$");
+        private static readonly Regex OtaAutoPattern = new Regex(
+            @"^OTA AUTO=(yes|no) STATUS=(OK|ERROR)(?: DETAIL=(.*))?$");
 
         internal MainForm()
         {
@@ -83,6 +173,8 @@ namespace StampPlcRseConfigurator
             _animationTimer.Start();
             _statusTimer.Tick += delegate { SendBackgroundStatus(); };
             ScanPorts();
+            RefreshWifiNetworks();
+            ScheduleGuiUpdateCheck();
             FormClosing += delegate { Disconnect(); };
         }
 
@@ -181,6 +273,7 @@ namespace StampPlcRseConfigurator
                 NewTextLabel("RS485 baud"), _baud,
                 NewTextLabel("Power register"), _register,
                 NewButton("Save inverter settings", SaveAll),
+                NewButton("Read SmartPLC settings", ReadSmartPlcSettings),
                 NewTextLabel("Offline inverter settings remain pending")
             });
             configurationLayout.Controls.Add(settingsFlow, 0, 1);
@@ -191,15 +284,22 @@ namespace StampPlcRseConfigurator
             var wifiFlow = NewFlow();
             wifiFlow.Padding = new Padding(0, 5, 0, 0);
             _wifiSsid.Width = 170;
+            _wifiSsid.DropDownStyle = ComboBoxStyle.DropDown;
+            _wifiSsid.BackColor = Color.FromArgb(7, 13, 19);
+            _wifiSsid.ForeColor = TextColor;
+            _wifiSsid.FlatStyle = FlatStyle.Flat;
             _wifiPassword.Width = 160;
             _wifiPassword.UseSystemPasswordChar = true;
-            StyleTextBox(_wifiSsid);
             StyleTextBox(_wifiPassword);
-            _automaticOta.Text = "Automatic OTA updates";
+            _automaticOta.Text = "Enable automatic OTA";
             _automaticOta.AutoSize = true;
             _automaticOta.ForeColor = TextColor;
             _automaticOta.Padding = new Padding(8, 5, 4, 0);
             _automaticOta.CheckedChanged += AutomaticOtaChanged;
+            _automaticOtaStatus.Text = "AUTO OTA: NOT READ";
+            _automaticOtaStatus.AutoSize = true;
+            _automaticOtaStatus.ForeColor = Muted;
+            _automaticOtaStatus.Padding = new Padding(8, 7, 8, 0);
             _wifiStatus.Text = "Not read";
             _wifiStatus.AutoSize = true;
             _wifiStatus.ForeColor = Muted;
@@ -207,18 +307,19 @@ namespace StampPlcRseConfigurator
             wifiFlow.Controls.AddRange(new Control[]
             {
                 NewTextLabel("SSID"), _wifiSsid,
+                NewButton("Refresh PC Wi-Fi", delegate { RefreshWifiNetworks(); }),
                 NewTextLabel("Password"), _wifiPassword,
                 NewButton("Save & connect", SaveWifi),
                 NewButton("Retry connection", delegate { Send("wifi connect"); }),
-                _automaticOta, _wifiStatus
+                _automaticOta, _automaticOtaStatus, _wifiStatus
             });
             wifiBox.Controls.Add(wifiFlow);
             settingsLayout.Controls.Add(wifiBox, 0, 1);
 
-            var firmwareBox = NewGroup("Firmware update");
+            var firmwareBox = NewGroup("SmartPLC firmware  |  device updates itself");
             var firmwareFlow = NewFlow();
             firmwareFlow.Padding = new Padding(0, 5, 0, 0);
-            _flashFirmware.Text = "USB flash V1.0.1";
+            _flashFirmware.Text = "USB flash " + ReleaseVersion;
             StyleButton(_flashFirmware);
             _flashFirmware.AutoSize = true;
             _flashFirmware.Click += FlashFirmware;
@@ -226,12 +327,20 @@ namespace StampPlcRseConfigurator
             _firmwareStatus.AutoSize = true;
             _firmwareStatus.ForeColor = Muted;
             _firmwareStatus.Padding = new Padding(12, 7, 0, 0);
+            _flashProgress.Size = new Size(52, 52);
+            _flashProgress.Value = 0;
+            _flashProgress.RingColor = Accent;
+            _flashProgress.Margin = new Padding(12, 0, 4, 0);
+            _flashProgressText.Text = "Ready";
+            _flashProgressText.AutoSize = true;
+            _flashProgressText.ForeColor = Muted;
+            _flashProgressText.Padding = new Padding(4, 7, 0, 0);
             firmwareFlow.Controls.AddRange(new Control[]
             {
                 _flashFirmware,
-                NewButton("Check OTA update", delegate { Send("ota check"); }),
-                NewButton("Install OTA now", InstallOta),
-                _firmwareStatus
+                NewButton("Check SmartPLC OTA", delegate { Send("ota check"); }),
+                NewButton("Update SmartPLC OTA", InstallOta),
+                _firmwareStatus, _flashProgress, _flashProgressText
             });
             firmwareBox.Controls.Add(firmwareFlow);
             settingsLayout.Controls.Add(firmwareBox, 0, 2);
@@ -445,6 +554,7 @@ namespace StampPlcRseConfigurator
                 _connect.Text = "Disconnect";
                 _connection.Text = "\u25CF  CONNECTED  " + _ports.Text;
                 _connection.ForeColor = Accent;
+                SetAutomaticOtaStatus(null);
                 AppendLog("[PC] Connected to " + _ports.Text);
                 _statusTimer.Start();
                 var timer = new System.Windows.Forms.Timer { Interval = 300 };
@@ -487,7 +597,7 @@ namespace StampPlcRseConfigurator
                 return;
             }
             if (MessageBox.Show(this,
-                "Firmware will be compiled and written to " + _ports.Text + ".\r\n" +
+                "SmartPLC firmware " + ReleaseVersion + " will be written to " + _ports.Text + ".\r\n" +
                 "The USB connection will be closed during flashing. Continue?",
                 "Flash StampPLC firmware", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
 
@@ -496,11 +606,64 @@ namespace StampPlcRseConfigurator
             _flashFirmware.Enabled = false;
             _connection.Text = "\u25CF  FLASHING " + _ports.Text;
             _connection.ForeColor = Color.FromArgb(255, 184, 55);
+            _flashProgress.Indeterminate = true;
+            _flashProgress.RingColor = Color.FromArgb(255, 184, 55);
+            _flashProgressText.Text = "Connecting / preparing...";
+            _flashProgressText.ForeColor = Color.FromArgb(255, 184, 55);
             AppendLog("[FLASH] Starting firmware update on " + _ports.Text);
             string port = _ports.Text;
             ThreadPool.QueueUserWorkItem(delegate
             {
                 int exitCode = -1;
+                int lastReportedProgress = -1;
+                long[] imageSizes = hasBundledFlasher
+                    ? new long[]
+                    {
+                        new FileInfo(Path.Combine(firmwareDirectory, "bootloader.bin")).Length,
+                        new FileInfo(Path.Combine(firmwareDirectory, "partitions.bin")).Length,
+                        new FileInfo(Path.Combine(firmwareDirectory, "boot_app0.bin")).Length,
+                        new FileInfo(Path.Combine(firmwareDirectory, "firmware.bin")).Length
+                    }
+                    : new long[] { 1 };
+                long totalImageBytes = 0;
+                foreach (long imageSize in imageSizes) totalImageBytes += imageSize;
+                var diagnosticTail = new System.Collections.Generic.Queue<string>();
+                object diagnosticLock = new object();
+                Action<string> reportFlashLine = delegate(string line)
+                {
+                    Match progress = Regex.Match(line, @"^Writing at 0x([0-9A-Fa-f]+).*\((\d+) %\)$");
+                    if (progress.Success)
+                    {
+                        long address = long.Parse(progress.Groups[1].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+                        int phasePercent = int.Parse(progress.Groups[2].Value, CultureInfo.InvariantCulture);
+                        int phase = address < 0x8000 ? 0 : address < 0xE000 ? 1 : address < 0x10000 ? 2 : 3;
+                        long completedBytes = 0;
+                        for (int i = 0; i < phase && i < imageSizes.Length; ++i) completedBytes += imageSizes[i];
+                        if (phase < imageSizes.Length)
+                            completedBytes += imageSizes[phase] * phasePercent / 100;
+                        int overall = !hasBundledFlasher || totalImageBytes == 0 ? phasePercent :
+                            (int)Math.Max(0, Math.Min(100, completedBytes * 100 / totalImageBytes));
+                        if (overall == lastReportedProgress) return;
+                        lastReportedProgress = overall;
+                        BeginInvoke(new Action(delegate
+                        {
+                            _flashProgress.Indeterminate = false;
+                            _flashProgress.RingColor = Accent;
+                            _flashProgress.Value = overall;
+                            _flashProgressText.Text = "Writing " + overall + "%";
+                            _flashProgressText.ForeColor = TextColor;
+                            if (overall % 5 == 0 || overall == 100)
+                                AppendLog("[FLASH] Overall write progress: " + overall + "%");
+                        }));
+                        return;
+                    }
+                    lock (diagnosticLock)
+                    {
+                        diagnosticTail.Enqueue(line);
+                        while (diagnosticTail.Count > 10) diagnosticTail.Dequeue();
+                    }
+                    BeginInvoke(new Action<string>(AppendLog), "[FLASH] " + line);
+                };
                 try
                 {
                     var info = new ProcessStartInfo
@@ -508,7 +671,8 @@ namespace StampPlcRseConfigurator
                         FileName = hasBundledFlasher ? bundledEsptool : platformIo,
                         Arguments = hasBundledFlasher
                             ? "--chip esp32s3 --port " + port +
-                              " --baud 1500000 --before default_reset --after hard_reset write_flash -z" +
+                              " --baud 460800 --before default_reset --after hard_reset --no-stub write_flash" +
+                              " --no-compress --verify" +
                               " --flash_mode dio --flash_freq 80m --flash_size 8MB" +
                               " 0x0000 bootloader.bin 0x8000 partitions.bin 0xe000 boot_app0.bin 0x10000 firmware.bin"
                             : "run -t upload --upload-port " + port,
@@ -522,11 +686,11 @@ namespace StampPlcRseConfigurator
                     {
                         process.OutputDataReceived += delegate(object s, DataReceivedEventArgs a)
                         {
-                            if (!string.IsNullOrEmpty(a.Data)) BeginInvoke(new Action<string>(AppendLog), "[FLASH] " + a.Data);
+                            if (!string.IsNullOrEmpty(a.Data)) reportFlashLine(a.Data);
                         };
                         process.ErrorDataReceived += delegate(object s, DataReceivedEventArgs a)
                         {
-                            if (!string.IsNullOrEmpty(a.Data)) BeginInvoke(new Action<string>(AppendLog), "[FLASH] " + a.Data);
+                            if (!string.IsNullOrEmpty(a.Data)) reportFlashLine(a.Data);
                         };
                         process.Start();
                         process.BeginOutputReadLine();
@@ -546,11 +710,43 @@ namespace StampPlcRseConfigurator
                     ScanPorts();
                     _connection.Text = exitCode == 0 ? "\u25CF  FLASH COMPLETE" : "\u25CF  FLASH FAILED";
                     _connection.ForeColor = exitCode == 0 ? Accent : Color.OrangeRed;
+                    _flashProgress.Indeterminate = false;
+                    _flashProgress.RingColor = exitCode == 0 ? Accent : Color.OrangeRed;
+                    if (exitCode == 0) _flashProgress.Value = 100;
+                    else if (lastReportedProgress >= 0) _flashProgress.Value = lastReportedProgress;
+                    _flashProgressText.Text = exitCode == 0 ? "Complete & verified" :
+                        "Failed" + (lastReportedProgress >= 0 ? " at " + lastReportedProgress + "%" : "");
+                    _flashProgressText.ForeColor = exitCode == 0 ? Accent : Color.OrangeRed;
                     AppendLog(exitCode == 0
                         ? "[FLASH] Completed. Reconnect to read the new StampPLC."
                         : "[FLASH] Failed. Check the COM port and USB cable, then retry.");
+                    if (exitCode == 0)
+                    {
+                        MessageBox.Show(this,
+                            "SmartPLC firmware " + ReleaseVersion + " was written and verified successfully.\r\n\r\n" +
+                            "Saved inverter and RS485 settings remain unchanged. Reconnect USB to continue.",
+                            "Firmware flash complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                    else
+                    {
+                        string details;
+                        lock (diagnosticLock) details = string.Join("\r\n", diagnosticTail.ToArray());
+                        MessageBox.Show(this,
+                            "Firmware flashing failed.\r\n\r\n" + details +
+                            "\r\n\r\nThe complete output is available on the Commissioning tab.",
+                            "Firmware flash failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
                 }));
             });
+        }
+
+        internal void ShowFlashProgressPreview()
+        {
+            _flashProgress.Indeterminate = false;
+            _flashProgress.RingColor = Accent;
+            _flashProgress.Value = 64;
+            _flashProgressText.Text = "Writing 64%";
+            _flashProgressText.ForeColor = TextColor;
         }
 
         private void Disconnect()
@@ -573,6 +769,7 @@ namespace StampPlcRseConfigurator
             _connect.Text = "Connect";
             _connection.Text = "\u25CF  DISCONNECTED";
             _connection.ForeColor = Muted;
+            SetAutomaticOtaStatus(null);
         }
 
         private void SerialDataReceived(object sender, SerialDataReceivedEventArgs e)
@@ -703,6 +900,28 @@ namespace StampPlcRseConfigurator
             });
         }
 
+        private void ReadSmartPlcSettings(object sender, EventArgs e)
+        {
+            if (_serial == null || !_serial.IsOpen)
+            {
+                MessageBox.Show(this, "Connect to the SmartPLC by USB first.", "Not connected",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            _result.Text = "Reading SmartPLC settings...";
+            _wifiStatus.Text = "Reading...";
+            SetAutomaticOtaStatus(null);
+            Send("show");
+            var timer = new System.Windows.Forms.Timer { Interval = 180 };
+            timer.Tick += delegate
+            {
+                timer.Stop();
+                timer.Dispose();
+                Send("wifi show");
+            };
+            timer.Start();
+        }
+
         private static bool TryParseUShort(string value, out ushort result)
         {
             if (value.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
@@ -736,6 +955,137 @@ namespace StampPlcRseConfigurator
             catch { return ""; }
         }
 
+        private static string RunNetsh(string arguments)
+        {
+            var info = new ProcessStartInfo
+            {
+                FileName = "netsh.exe",
+                Arguments = arguments,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            using (var process = Process.Start(info))
+            {
+                string output = process.StandardOutput.ReadToEnd();
+                process.WaitForExit(8000);
+                return output;
+            }
+        }
+
+        private void RefreshWifiNetworks()
+        {
+            _wifiStatus.Text = "Reading Wi-Fi networks from this PC...";
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                try
+                {
+                    string interfaces = RunNetsh("wlan show interfaces");
+                    string networks = RunNetsh("wlan show networks mode=bssid");
+                    string profiles = RunNetsh("wlan show profiles");
+                    Match currentMatch = Regex.Match(interfaces, @"(?m)^\s*SSID\s*:\s*(.+?)\s*$");
+                    string current = currentMatch.Success ? currentMatch.Groups[1].Value.Trim() : "";
+                    var names = new System.Collections.Generic.List<string>();
+                    if (!string.IsNullOrWhiteSpace(current)) names.Add(current);
+                    foreach (Match match in Regex.Matches(networks, @"(?m)^\s*SSID\s+\d+\s*:\s*(.*?)\s*$"))
+                    {
+                        string name = match.Groups[1].Value.Trim();
+                        if (!string.IsNullOrWhiteSpace(name) && !names.Contains(name)) names.Add(name);
+                    }
+                    // Windows 11 can hide live WLAN scan results when Location
+                    // access is disabled. Saved profile names remain available
+                    // and provide a useful selection list without reading keys.
+                    foreach (Match match in Regex.Matches(profiles, @"(?m)^\s*[^:\r\n]+:\s*(.*?)\s*$"))
+                    {
+                        string name = match.Groups[1].Value.Trim();
+                        if (!string.IsNullOrWhiteSpace(name) && name != "<None>" && !names.Contains(name))
+                            names.Add(name);
+                    }
+                    BeginInvoke(new Action(delegate
+                    {
+                        string typed = _wifiSsid.Text;
+                        _wifiSsid.Items.Clear();
+                        _wifiSsid.Items.AddRange(names.ToArray());
+                        if (!string.IsNullOrWhiteSpace(current)) _wifiSsid.Text = current;
+                        else if (!string.IsNullOrWhiteSpace(typed)) _wifiSsid.Text = typed;
+                        _wifiStatus.Text = names.Count == 0
+                            ? "No PC Wi-Fi network found; SSID can still be typed"
+                            : "PC Wi-Fi list refreshed" + (string.IsNullOrWhiteSpace(current)
+                                ? "; choose a saved profile (enable Windows Location to identify the current SSID)"
+                                : "; connected: " + current);
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    BeginInvoke(new Action(delegate
+                    {
+                        _wifiStatus.Text = "Could not read PC Wi-Fi: " + ex.Message;
+                        _wifiStatus.ForeColor = Color.FromArgb(255, 184, 55);
+                    }));
+                }
+            });
+        }
+
+        private static Version ParseReleaseVersion(string value)
+        {
+            Version parsed;
+            return Version.TryParse(value.Trim().TrimStart('V', 'v'), out parsed)
+                ? parsed : new Version(0, 0, 0);
+        }
+
+        private void ScheduleGuiUpdateCheck()
+        {
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                Thread.Sleep(2500);
+                try
+                {
+                    ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+                    string json;
+                    using (var client = new WebClient())
+                    {
+                        client.Headers[HttpRequestHeader.UserAgent] = "14a-Bridge-GUI-" + ReleaseVersion;
+                        json = client.DownloadString("https://api.github.com/repos/tatsuo25103/14a-bridge/releases/latest");
+                    }
+                    Match match = Regex.Match(json, "\\\"tag_name\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"");
+                    if (!match.Success) return;
+                    string latest = match.Groups[1].Value.ToUpperInvariant();
+                    if (ParseReleaseVersion(latest) <= ParseReleaseVersion(ReleaseVersion)) return;
+                    string ignored = "";
+                    using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\MES\14a Bridge"))
+                        if (key != null) ignored = Convert.ToString(key.GetValue("IgnoredGuiVersion", ""));
+                    if (string.Equals(ignored, latest, StringComparison.OrdinalIgnoreCase)) return;
+                    if (IsDisposed || !IsHandleCreated) return;
+                    BeginInvoke(new Action(delegate
+                    {
+                        using (var dialog = new GuiUpdatePrompt(ReleaseVersion, latest))
+                        {
+                            DialogResult result = dialog.ShowDialog(this);
+                            if (dialog.DoNotRemind)
+                            {
+                                using (RegistryKey key = Registry.CurrentUser.CreateSubKey(@"Software\MES\14a Bridge"))
+                                    if (key != null) key.SetValue("IgnoredGuiVersion", latest, RegistryValueKind.String);
+                            }
+                            if (result == DialogResult.Yes)
+                            {
+                                Process.Start(new ProcessStartInfo
+                                {
+                                    FileName = "https://github.com/tatsuo25103/14a-bridge/releases/latest",
+                                    UseShellExecute = true
+                                });
+                            }
+                        }
+                    }));
+                }
+                catch
+                {
+                    // GUI update checks must never interrupt configuration or
+                    // show an error merely because the PC is offline.
+                }
+            });
+        }
+
         private void SaveWifi(object sender, EventArgs e)
         {
             string ssid = _wifiSsid.Text;
@@ -767,10 +1117,11 @@ namespace StampPlcRseConfigurator
         private void AutomaticOtaChanged(object sender, EventArgs e)
         {
             if (_updatingWifiUi) return;
-            if (_automaticOta.Checked)
+            bool requested = _automaticOta.Checked;
+            if (requested)
             {
                 if (MessageBox.Show(this,
-                    "When enabled, StampPLC checks GitHub once after startup and every 24 hours. " +
+                    "When enabled, the SmartPLC itself checks GitHub once after startup and every 24 hours. " +
                     "An update is installed only while Wi-Fi is connected, the RSE input is valid, and Modbus control is idle. Continue?",
                     "Enable automatic OTA", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                 {
@@ -780,16 +1131,37 @@ namespace StampPlcRseConfigurator
                     return;
                 }
             }
-            Send("ota auto " + (_automaticOta.Checked ? "on" : "off"));
+            // Capture the operator's choice before opening the confirmation
+            // dialog. A background status packet can arrive while that modal
+            // dialog is open and must not turn an ON request into OFF.
+            _pendingAutomaticOta = requested;
+            _updatingWifiUi = true;
+            _automaticOta.Checked = requested;
+            _updatingWifiUi = false;
+            if (Send("ota auto " + (requested ? "on" : "off")))
+            {
+                _automaticOtaStatus.Text = "AUTO OTA: SAVING...";
+                _automaticOtaStatus.ForeColor = Color.FromArgb(255, 184, 55);
+            }
+            else _pendingAutomaticOta = null;
+        }
+
+        private void SetAutomaticOtaStatus(bool? enabled)
+        {
+            _automaticOtaStatus.Text = !enabled.HasValue ? "AUTO OTA: NOT READ" :
+                (enabled.Value ? "AUTO OTA: ON" : "AUTO OTA: OFF");
+            _automaticOtaStatus.ForeColor = !enabled.HasValue ? Muted :
+                (enabled.Value ? Accent : Color.FromArgb(255, 184, 55));
         }
 
         private void InstallOta(object sender, EventArgs e)
         {
             if (MessageBox.Show(this,
                 "Download and install the latest firmware from the official GitHub release?\r\n\r\n" +
-                "Keep the StampPLC powered. The controller will reboot when verification succeeds.",
-                "Install OTA update", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
-            _firmwareStatus.Text = "OTA update in progress...";
+                "The SmartPLC itself will use its saved Wi-Fi connection to download and install the update. " +
+                "The Windows GUI is not being updated.\r\n\r\nKeep the StampPLC powered.",
+                "Update SmartPLC firmware by OTA", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            _firmwareStatus.Text = "SmartPLC OTA in progress...";
             Send("ota update CONFIRM");
         }
 
@@ -884,14 +1256,41 @@ namespace StampPlcRseConfigurator
                 bool automatic = match.Groups[4].Value == "yes";
                 string ssid = HexUtf8(match.Groups[5].Value);
                 if (!_wifiSsid.Focused && saved) _wifiSsid.Text = ssid;
-                _updatingWifiUi = true;
-                _automaticOta.Checked = automatic;
-                _updatingWifiUi = false;
+                bool staleWhileSaving = _pendingAutomaticOta.HasValue &&
+                    automatic != _pendingAutomaticOta.Value;
+                if (!staleWhileSaving)
+                {
+                    if (_pendingAutomaticOta.HasValue) _pendingAutomaticOta = null;
+                    _updatingWifiUi = true;
+                    _automaticOta.Checked = automatic;
+                    _updatingWifiUi = false;
+                    SetAutomaticOtaStatus(automatic);
+                }
                 _firmwareStatus.Text = "Installed firmware: V" + version;
                 _wifiStatus.Text = connected
                     ? "Connected: " + ssid + "  |  " + match.Groups[6].Value + "  |  " + match.Groups[7].Value + " dBm"
                     : (saved ? "Saved: " + ssid + "  |  not connected" : "No Wi-Fi saved");
                 _wifiStatus.ForeColor = connected ? Accent : Color.FromArgb(255, 184, 55);
+                return;
+            }
+            match = OtaAutoPattern.Match(line.Trim());
+            if (match.Success)
+            {
+                bool enabled = match.Groups[1].Value == "yes";
+                bool ok = match.Groups[2].Value == "OK";
+                _pendingAutomaticOta = null;
+                if (ok)
+                {
+                    _updatingWifiUi = true;
+                    _automaticOta.Checked = enabled;
+                    _updatingWifiUi = false;
+                    SetAutomaticOtaStatus(enabled);
+                }
+                else
+                {
+                    _automaticOtaStatus.Text = "AUTO OTA: SAVE FAILED";
+                    _automaticOtaStatus.ForeColor = Color.OrangeRed;
+                }
                 return;
             }
             match = OtaPattern.Match(line.Trim());
@@ -1012,7 +1411,68 @@ namespace StampPlcRseConfigurator
                    ModePattern.IsMatch("Mode: DRY-RUN  RS485: 19200 baud  register: 0x04E5  quantity: 2") &&
                    IdPattern.IsMatch("3   yes        10000  10000   6000   3000      0     6000      6000  yes") &&
                    ProbePattern.IsMatch("PROBE ID=3 REGISTER=0x04E5 VALUE=10000 STATUS=OK DETAIL=readback verified") &&
-                   WifiPattern.IsMatch("WIFI VERSION=1.0.1 SAVED=yes CONNECTED=yes AUTO=no SSIDHEX=4D4553 IP=192.168.1.2 RSSI=-52");
+                   WifiPattern.IsMatch("WIFI VERSION=1.0.1 SAVED=yes CONNECTED=yes AUTO=no SSIDHEX=4D4553 IP=192.168.1.2 RSSI=-52") &&
+                   OtaAutoPattern.IsMatch("OTA AUTO=yes STATUS=OK DETAIL=saved") &&
+                   OtaAutoPattern.IsMatch("OTA AUTO=no STATUS=ERROR DETAIL=NVS save failed");
+        }
+    }
+
+    internal sealed class GuiUpdatePrompt : Form
+    {
+        private readonly CheckBox _doNotRemind = new CheckBox();
+        internal bool DoNotRemind { get { return _doNotRemind.Checked; } }
+
+        internal GuiUpdatePrompt(string currentVersion, string latestVersion)
+        {
+            Text = "14a Bridge GUI update available";
+            ClientSize = new Size(470, 205);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.CenterParent;
+            BackColor = Color.FromArgb(16, 22, 30);
+            ForeColor = Color.FromArgb(225, 235, 240);
+            Font = new Font("Segoe UI", 9F);
+
+            var title = new Label
+            {
+                Text = "A NEW WINDOWS GUI VERSION IS AVAILABLE",
+                AutoSize = true, Location = new Point(24, 22),
+                Font = new Font("Segoe UI Semibold", 12F),
+                ForeColor = Color.FromArgb(0, 220, 210)
+            };
+            var detail = new Label
+            {
+                Text = "Installed: " + currentVersion + "\r\nAvailable: " + latestVersion +
+                       "\r\n\r\nThis updates only the Windows GUI. SmartPLC firmware is unchanged.",
+                AutoSize = true, Location = new Point(25, 57),
+                ForeColor = Color.FromArgb(205, 220, 228)
+            };
+            _doNotRemind.Text = "Do not remind me again for " + latestVersion;
+            _doNotRemind.AutoSize = true;
+            _doNotRemind.Location = new Point(25, 130);
+            _doNotRemind.ForeColor = Color.FromArgb(165, 185, 198);
+
+            var update = new Button
+            {
+                Text = "Open download page", DialogResult = DialogResult.Yes,
+                Size = new Size(145, 30), Location = new Point(189, 164),
+                FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(18, 70, 78),
+                ForeColor = Color.White
+            };
+            update.FlatAppearance.BorderColor = Color.FromArgb(0, 220, 210);
+            var later = new Button
+            {
+                Text = "Later", DialogResult = DialogResult.No,
+                Size = new Size(95, 30), Location = new Point(345, 164),
+                FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(25, 34, 45),
+                ForeColor = Color.White
+            };
+            later.FlatAppearance.BorderColor = Color.FromArgb(100, 125, 140);
+            AcceptButton = update;
+            CancelButton = later;
+            Controls.AddRange(new Control[] { title, detail, _doNotRemind, update, later });
         }
     }
 
@@ -1151,16 +1611,42 @@ namespace StampPlcRseConfigurator
                 using (var form = new MainForm()) form.CreateControl();
                 return 0;
             }
-            if (args.Length == 2 && (args[0] == "--render-ui" || args[0] == "--render-ui-debug"))
+            if (args.Length == 2 && args[0] == "--render-update-prompt")
+            {
+                using (var prompt = new GuiUpdatePrompt("V1.0.2", "V1.0.3"))
+                {
+                    prompt.Show();
+                    Application.DoEvents();
+                    using (var bitmap = new Bitmap(prompt.Width, prompt.Height))
+                    {
+                        prompt.DrawToBitmap(bitmap, new Rectangle(Point.Empty, prompt.Size));
+                        bitmap.Save(args[1]);
+                    }
+                }
+                return 0;
+            }
+            if (args.Length == 2 && (args[0] == "--render-ui" || args[0] == "--render-ui-debug" ||
+                args[0] == "--render-flash-progress"))
             {
                 using (var form = new MainForm())
                 {
                     form.Show();
                     Application.DoEvents();
+                    DateTime renderReady = DateTime.UtcNow.AddSeconds(2);
+                    while (DateTime.UtcNow < renderReady)
+                    {
+                        Application.DoEvents();
+                        Thread.Sleep(25);
+                    }
                     if (args[0] == "--render-ui-debug")
                     {
                         Control[] tabs = form.Controls.Find("MainTabs", true);
                         if (tabs.Length == 1) ((TabControl)tabs[0]).SelectedIndex = 1;
+                        Application.DoEvents();
+                    }
+                    if (args[0] == "--render-flash-progress")
+                    {
+                        form.ShowFlashProgressPreview();
                         Application.DoEvents();
                     }
                     using (var bitmap = new Bitmap(form.Width, form.Height))

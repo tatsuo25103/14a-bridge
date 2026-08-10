@@ -11,7 +11,7 @@
 extern const uint8_t githubRootsStart[] asm("_binary_certs_github_roots_pem_start");
 
 namespace {
-constexpr char CURRENT_VERSION[] = "1.0.1";
+constexpr char CURRENT_VERSION[] = "1.0.2";
 constexpr char MANIFEST_URL[] =
     "https://github.com/tatsuo25103/14a-bridge/releases/latest/download/ota_manifest.json";
 constexpr char ALLOWED_DOWNLOAD_PREFIX[] =
@@ -141,12 +141,17 @@ void OtaManager::connectNow() {
     configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
 }
 
-void OtaManager::setAutomatic(bool enabled) {
+bool OtaManager::setAutomatic(bool enabled) {
+    const bool previous = automatic_;
     automatic_ = enabled;
-    save();
+    if (!save()) {
+        automatic_ = previous;
+        return false;
+    }
     if (enabled) {
         nextAutomaticCheckMs_ = millis() + 5000;
     }
+    return true;
 }
 
 bool OtaManager::connected() const { return WiFi.status() == WL_CONNECTED; }

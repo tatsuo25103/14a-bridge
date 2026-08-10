@@ -13,7 +13,7 @@ public:
                      String& detail);
     bool clearWifi();
     void connectNow();
-    void setAutomatic(bool enabled);
+    bool setAutomatic(bool enabled);
 
     bool automatic() const { return automatic_; }
     bool hasCredentials() const { return !ssid_.isEmpty(); }

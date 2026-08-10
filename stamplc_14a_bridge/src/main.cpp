@@ -549,8 +549,11 @@ void processUsbCommand(String line) {
     }
     if (line.equalsIgnoreCase("ota auto on") || line.equalsIgnoreCase("ota auto off")) {
         const bool enabled = line.equalsIgnoreCase("ota auto on");
-        otaManager.setAutomatic(enabled);
-        Serial.printf("OTA AUTO=%s STATUS=OK\r\n", enabled ? "yes" : "no");
+        const bool saved = otaManager.setAutomatic(enabled);
+        Serial.printf("OTA AUTO=%s STATUS=%s DETAIL=%s\r\n",
+                      otaManager.automatic() ? "yes" : "no",
+                      saved ? "OK" : "ERROR",
+                      saved ? "saved" : "NVS save failed");
         return;
     }
     if (line.equalsIgnoreCase("ota check")) {
@@ -1041,6 +1044,8 @@ void updateDisplay(bool force) {
     ui.drawString(invalid ? "--" : String(displayedResValue) + "%", 58, 9);
     ui.setTextColor(COLOR_MUTED);
     ui.drawString("kW", 91, 9);
+    ui.setTextDatum(middle_right);
+    ui.drawString("v" APP_VERSION, screenW - 55, 9);
     const uint16_t modeColor = config.dryRun ? COLOR_CYAN : COLOR_AMBER;
     ui.fillRoundRect(screenW - 48, 1, 44, 16, 4, modeColor);
     ui.setTextDatum(middle_center);

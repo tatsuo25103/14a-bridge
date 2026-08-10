@@ -1,16 +1,22 @@
 # 14a Bridge
 
-## V1.0.1 release
+## V1.0.2 release
+
+V1.0.2 adds the SmartPLC automatic-OTA workflow, persistent OTA-state
+verification, an always-visible firmware version in the SmartPLC display
+header, a clear OTA status in the Windows GUI, a manual settings reload, and
+a verified circular USB-flashing progress indicator. Existing inverter,
+RS485, Wi-Fi, and OTA preferences remain stored in NVS across the update.
 
 For a first-time Windows installation, download and run
-`14a_Bridge_Setup_V1.0.1.exe` from the GitHub release. The installer
+`14a_Bridge_Setup_V1.0.2.exe` from the GitHub release. The installer
 uses the MES icon, installs the USB Configurator, the current StampPLC
 firmware, and a self-contained ESP32-S3 flasher. No Python, PlatformIO, or
 development tools are required on the customer's computer.
 
 To program a new StampPLC, or upgrade V1.0.0 to the OTA partition layout:
 connect it by USB, start the configurator, select its COM port, open
-**Settings**, and click **USB flash V1.0.1**. This writes the controller
+**Settings**, and click **USB flash V1.0.2**. This writes the controller
 firmware and OTA partition table; it does not write any inverter over RS485.
 The NVS addresses are unchanged so existing inverter settings are retained.
 
@@ -182,9 +188,21 @@ The GUI is divided into **Settings** and **Commissioning** tabs. It can:
 - set each inverter's maximum PV power;
 - configure RS485 baud and the power-limit register;
 - synchronize the StampPLC RTC from the PC;
-- install the bundled V1.0.1 firmware over USB;
-- save Wi-Fi credentials and show connection/IP/RSSI state;
-- check or install GitHub OTA releases and enable/disable automatic OTA;
+- install the bundled V1.0.2 firmware over USB with a live circular progress
+  indicator, percentage, completion verification, and clear failure state;
+- select an SSID from the PC's current/saved Wi-Fi profiles, save the
+  SmartPLC Wi-Fi credentials, and show connection/IP/RSSI state. Windows may
+  require Location access to identify the currently connected SSID; saved
+  profiles remain selectable and the SSID can always be typed manually;
+- show the SmartPLC automatic-OTA state explicitly as **ON**, **OFF**, or
+  **NOT READ**, and manually reload all saved SmartPLC inverter, RS485,
+  Wi-Fi, firmware, and OTA settings;
+- check or install SmartPLC GitHub OTA releases and enable/disable the
+  SmartPLC's automatic OTA client;
+- check the separately published Windows GUI version silently in the
+  background. A prompt appears only for a newer published version and offers
+  a per-version **do not remind again** option; this never changes SmartPLC
+  firmware;
 - switch between dry-run and live control with confirmation;
 - test 100%, 60%, 30%, and 0%;
 - reapply the level currently selected by the RSE;
@@ -195,6 +213,10 @@ used as a fallback. Enter `help` to list commands and `show` to read all
 settings. Use `probe all` to read register `0x04E5` from every enabled ID, or
 `probe 3` to read only ID 3. Probe commands never write an inverter value.
 Successful setting commands are saved immediately to NVS.
+
+The standalone USB flasher uses the ESP32-S3 ROM loader (`--no-stub`) at
+460800 baud and verifies all written regions. This avoids relying on external
+esptool stub-data files on a first-time customer's PC.
 
 ## OTA release assets
 
