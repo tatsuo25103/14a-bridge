@@ -32,6 +32,9 @@ int16_t activePercent = -1;
 bool outputHealthy = false;
 uint32_t rawChangedAt = 0;
 uint32_t lastDisplayAt = 0;
+String otaDisplayStage;
+int16_t otaDisplayPercent = -1;
+uint32_t otaDisplayUpdatedAt = 0;
 uint32_t lastRequested[INVERTER_COUNT] = {};
 uint32_t lastReadback[INVERTER_COUNT] = {};
 bool inverterHealthy[INVERTER_COUNT] = {};
@@ -549,8 +552,11 @@ void processUsbCommand(String line) {
     }
     if (line.equalsIgnoreCase("ota auto on") || line.equalsIgnoreCase("ota auto off")) {
         const bool enabled = line.equalsIgnoreCase("ota auto on");
-        otaManager.setAutomatic(enabled);
-        Serial.printf("OTA AUTO=%s STATUS=OK\r\n", enabled ? "yes" : "no");
+        const bool saved = otaManager.setAutomatic(enabled);
+        Serial.printf("OTA AUTO=%s STATUS=%s DETAIL=%s\r\n",
+                      otaManager.automatic() ? "yes" : "no",
+                      saved ? "OK" : "ERROR",
+                      saved ? "saved" : "NVS save failed");
         return;
     }
     if (line.equalsIgnoreCase("ota check")) {
@@ -1019,6 +1025,44 @@ void updateDisplay(bool force) {
 
     const int16_t screenW = ui.width();
     const int16_t screenH = ui.height();
+
+    if (!otaDisplayStage.isEmpty()) {
+        ui.fillScreen(TFT_BLACK);
+        ui.fillRect(0, 0, screenW, 22, COLOR_NAVY);
+        ui.setTextDatum(middle_center);
+        ui.setTextSize(1);
+        ui.setTextColor(COLOR_CYAN);
+        ui.drawString("SMARTPLC OTA  v" APP_VERSION, screenW / 2, 11);
+        ui.setTextSize(2);
+        ui.setTextColor(otaDisplayStage == "ERROR" ? COLOR_RED : TFT_WHITE);
+        ui.drawString(otaDisplayStage, screenW / 2, 53);
+
+        const int16_t barX = 20;
+        const int16_t barY = 78;
+        const int16_t barW = screenW - 40;
+        ui.drawRoundRect(barX, barY, barW, 14, 5, COLOR_MUTED);
+        if (otaDisplayPercent >= 0) {
+            const int16_t filled = static_cast<int16_t>(
+                (barW - 4) * constrain(otaDisplayPercent, 0, 100) / 100);
+            if (filled > 0)
+                ui.fillRoundRect(barX + 2, barY + 2, filled, 10, 4,
+                                 otaDisplayStage == "ERROR" ? COLOR_RED : COLOR_CYAN);
+            ui.setTextSize(1);
+            ui.setTextColor(TFT_WHITE);
+            ui.drawString(String(otaDisplayPercent) + "%", screenW / 2, 105);
+        } else {
+            const uint8_t activeDot = (millis() / 180) % 3;
+            for (uint8_t dot = 0; dot < 3; ++dot)
+                ui.fillCircle(screenW / 2 - 14 + dot * 14, 105, 3,
+                              dot == activeDot ? COLOR_CYAN : COLOR_MUTED);
+        }
+        ui.setTextSize(1);
+        ui.setTextColor(COLOR_AMBER);
+        ui.drawString("KEEP POWER ON", screenW / 2, screenH - 10);
+        ui.setTextDatum(top_left);
+        ui.pushSprite(0, 0);
+        return;
+    }
     drawMesWatermark(ui, (screenW - MES_LOGO_W * MES_LOGO_SCALE) / 2, 31);
 
     // One global RSE command keeps six-inverter tiles uncluttered.
@@ -1041,6 +1085,8 @@ void updateDisplay(bool force) {
     ui.drawString(invalid ? "--" : String(displayedResValue) + "%", 58, 9);
     ui.setTextColor(COLOR_MUTED);
     ui.drawString("kW", 91, 9);
+    ui.setTextDatum(middle_right);
+    ui.drawString("v" APP_VERSION, screenW - 55, 9);
     const uint16_t modeColor = config.dryRun ? COLOR_CYAN : COLOR_AMBER;
     ui.fillRoundRect(screenW - 48, 1, 44, 16, 4, modeColor);
     ui.setTextDatum(middle_center);
@@ -1271,6 +1317,12 @@ void setup() {
     otaManager.setSafetyCheck([] {
         return !applyInProgress && readRseMask() == stableRseMask;
     });
+    otaManager.setProgressCallback([](const String& stage, int percent) {
+        otaDisplayStage = stage;
+        otaDisplayPercent = percent;
+        otaDisplayUpdatedAt = millis();
+        updateDisplay(true);
+    });
     recordSystem("boot", "firmware started");
     // Read the actual inverter state before evaluating or applying the RSE
     // command. This is always FC03-only, including when LIVE was saved.
@@ -1299,6 +1351,13 @@ void loop() {
     pollNextEnabledInverter();
     otaManager.service(activePercent >= 0 && !applyInProgress &&
                        millis() - rawChangedAt >= config.debounceMs + 2000);
+    if (!otaDisplayStage.isEmpty() &&
+        (otaDisplayStage == "ERROR" || otaDisplayStage == "UP TO DATE" ||
+         otaDisplayStage == "UPDATE FOUND") &&
+        millis() - otaDisplayUpdatedAt > 3000) {
+        otaDisplayStage = "";
+        otaDisplayPercent = -1;
+    }
     updateDisplay();
     delay(2);
 }

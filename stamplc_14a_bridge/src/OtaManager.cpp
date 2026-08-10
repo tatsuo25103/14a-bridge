@@ -11,11 +11,13 @@
 extern const uint8_t githubRootsStart[] asm("_binary_certs_github_roots_pem_start");
 
 namespace {
-constexpr char CURRENT_VERSION[] = "1.0.1";
+constexpr char CURRENT_VERSION[] = "1.0.2";
 constexpr char MANIFEST_URL[] =
-    "https://github.com/tatsuo25103/14a-bridge/releases/latest/download/ota_manifest.json";
+    "https://raw.githubusercontent.com/tatsuo25103/14a-bridge/main/"
+    "stamplc_14a_bridge/release/ota_manifest.json";
 constexpr char ALLOWED_DOWNLOAD_PREFIX[] =
-    "https://github.com/tatsuo25103/14a-bridge/releases/download/";
+    "https://raw.githubusercontent.com/tatsuo25103/14a-bridge/main/"
+    "stamplc_14a_bridge/release/";
 constexpr uint32_t FIRST_AUTO_CHECK_MS = 60000;
 constexpr uint32_t AUTO_CHECK_INTERVAL_MS = 24UL * 60UL * 60UL * 1000UL;
 constexpr size_t MAX_MANIFEST_BYTES = 4096;
@@ -41,6 +43,10 @@ String digestHex(const uint8_t digest[32]) {
 }  // namespace
 
 OtaManager otaManager;
+
+void OtaManager::reportProgress(const String& stage, int percent) {
+    if (progressCallback_) progressCallback_(stage, percent);
+}
 
 void OtaManager::begin() {
     load();
@@ -141,12 +147,17 @@ void OtaManager::connectNow() {
     configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
 }
 
-void OtaManager::setAutomatic(bool enabled) {
+bool OtaManager::setAutomatic(bool enabled) {
+    const bool previous = automatic_;
     automatic_ = enabled;
-    save();
+    if (!save()) {
+        automatic_ = previous;
+        return false;
+    }
     if (enabled) {
         nextAutomaticCheckMs_ = millis() + 5000;
     }
+    return true;
 }
 
 bool OtaManager::connected() const { return WiFi.status() == WL_CONNECTED; }
@@ -239,9 +250,15 @@ bool OtaManager::fetchManifest(Manifest& manifest, String& detail) {
 }
 
 bool OtaManager::checkForUpdate(String& availableVersion, String& detail) {
+    reportProgress("CHECKING");
     Manifest manifest;
-    if (!fetchManifest(manifest, detail)) return false;
+    if (!fetchManifest(manifest, detail)) {
+        reportProgress("ERROR");
+        return false;
+    }
     availableVersion = manifest.version;
+    reportProgress(compareVersions(manifest.version, CURRENT_VERSION) > 0
+                       ? "UPDATE FOUND" : "UP TO DATE", 100);
     return true;
 }
 
@@ -273,6 +290,8 @@ bool OtaManager::downloadAndInstall(const Manifest& manifest, String& detail) {
         return false;
     }
 
+    reportProgress("DOWNLOADING", 0);
+
     mbedtls_sha256_context sha;
     mbedtls_sha256_init(&sha);
     mbedtls_sha256_starts_ret(&sha, 0);
@@ -280,6 +299,7 @@ bool OtaManager::downloadAndInstall(const Manifest& manifest, String& detail) {
     uint8_t buffer[1024];
     int remaining = length;
     int lastPercent = -1;
+    int lastUiPercent = -1;
     bool ok = true;
     while (remaining > 0) {
         if (safetyCheck_ && !safetyCheck_()) {
@@ -302,6 +322,10 @@ bool OtaManager::downloadAndInstall(const Manifest& manifest, String& detail) {
         mbedtls_sha256_update_ret(&sha, buffer, count);
         remaining -= count;
         const int percent = static_cast<int>((static_cast<int64_t>(length - remaining) * 100) / length);
+        if (percent != lastUiPercent) {
+            lastUiPercent = percent;
+            reportProgress("DOWNLOADING", percent);
+        }
         if (percent / 10 != lastPercent / 10) {
             lastPercent = percent;
             Serial.printf("OTA PROGRESS=%d\r\n", percent);
@@ -313,6 +337,7 @@ bool OtaManager::downloadAndInstall(const Manifest& manifest, String& detail) {
     http.end();
 
     const String actualSha = digestHex(digest);
+    reportProgress("VERIFYING", 100);
     if (!ok || remaining != 0 || actualSha != manifest.sha256 ||
         (safetyCheck_ && !safetyCheck_())) {
         Update.abort();
@@ -325,18 +350,28 @@ bool OtaManager::downloadAndInstall(const Manifest& manifest, String& detail) {
         detail = "firmware image rejected: " + String(Update.errorString());
         return false;
     }
+    reportProgress("INSTALLING", 100);
     detail = "verified; rebooting into " + manifest.version;
     return true;
 }
 
 bool OtaManager::installUpdate(String& detail) {
+    reportProgress("CHECKING");
     Manifest manifest;
-    if (!fetchManifest(manifest, detail)) return false;
-    if (compareVersions(manifest.version, CURRENT_VERSION) <= 0) {
-        detail = "already running the latest version " + String(CURRENT_VERSION);
+    if (!fetchManifest(manifest, detail)) {
+        reportProgress("ERROR");
         return false;
     }
-    if (!downloadAndInstall(manifest, detail)) return false;
+    if (compareVersions(manifest.version, CURRENT_VERSION) <= 0) {
+        detail = "already running the latest version " + String(CURRENT_VERSION);
+        reportProgress("UP TO DATE", 100);
+        return false;
+    }
+    if (!downloadAndInstall(manifest, detail)) {
+        reportProgress("ERROR");
+        return false;
+    }
+    reportProgress("RESTARTING", 100);
     Serial.println("OTA STATUS=REBOOT DETAIL=" + detail);
     Serial.flush();
     delay(500);
