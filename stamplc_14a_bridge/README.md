@@ -2,8 +2,8 @@
 
 ## Quick start guide
 
-- [繁體中文：快速安裝與調適指南](docs/QUICK_START_zh-TW.md)
-- [Download the Word guide](docs/14A_Bridge_V1.0.2_Quick_Start_zh-TW.docx)
+- English: [read online](docs/QUICK_START_en.md) | [download Word](docs/14A_Bridge_V1.0.2_Quick_Start_EN.docx)
+- Traditional Chinese: [read online](docs/QUICK_START_zh-TW.md) | [download Word](docs/14A_Bridge_V1.0.2_Quick_Start_zh-TW.docx)
 
 ## V1.0.2 release
 
