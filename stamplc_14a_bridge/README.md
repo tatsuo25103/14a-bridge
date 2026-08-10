@@ -1,5 +1,10 @@
 # 14a Bridge
 
+## Quick start guide
+
+- [繁體中文：快速安裝與調適指南](docs/QUICK_START_zh-TW.md)
+- [Download the Word guide](docs/14A_Bridge_V1.0.2_Quick_Start_zh-TW.docx)
+
 ## V1.0.2 release
 
 V1.0.2 adds the SmartPLC automatic-OTA workflow, persistent OTA-state
