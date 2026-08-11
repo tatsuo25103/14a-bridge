@@ -68,6 +68,8 @@ private:
     void scheduleAfterSuccess();
     bool fetchManifest(Manifest& manifest, String& detail);
     bool fetchManifestUrl(const String& url, String& json, String& detail);
+    bool parseAndVerifyManifest(const String& json, Manifest& manifest,
+                                String& detail);
     bool verifyManifestSignature(const Manifest& manifest, String& detail);
     bool downloadAndInstall(const Manifest& manifest, String& detail);
     bool downloadUrlAndInstall(const Manifest& manifest, const String& url,

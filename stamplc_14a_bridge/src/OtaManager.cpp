@@ -387,6 +387,33 @@ bool OtaManager::fetchManifestUrl(const String& url, String& json,
     return true;
 }
 
+bool OtaManager::parseAndVerifyManifest(const String& json,
+                                        Manifest& manifest, String& detail) {
+    Manifest candidate;
+    candidate.version = jsonString(json, "version");
+    candidate.hardware = jsonString(json, "hardware");
+    candidate.size = jsonUInt(json, "size");
+    candidate.primaryUrl = jsonString(json, "primary_url");
+    candidate.backupUrl = jsonString(json, "backup_url");
+    candidate.sha256 = jsonString(json, "sha256");
+    candidate.signatureAlgorithm = jsonString(json, "signature_alg");
+    candidate.signature = jsonString(json, "signature");
+    candidate.sha256.toLowerCase();
+    if (candidate.version.isEmpty() || candidate.hardware != HARDWARE_ID ||
+        candidate.size == 0 || candidate.size > MAX_FIRMWARE_BYTES ||
+        !allowedDownloadUrl(candidate.primaryUrl) ||
+        !allowedDownloadUrl(candidate.backupUrl) ||
+        !validSha256(candidate.sha256) || candidate.signature.isEmpty()) {
+        detail = "manifest fields are missing or invalid";
+        return false;
+    }
+    if (!verifyManifestSignature(candidate, detail)) return false;
+    manifest = candidate;
+    detail = compareVersions(manifest.version, CURRENT_VERSION) > 0
+        ? "signed update available" : "signed manifest is up to date";
+    return true;
+}
+
 bool OtaManager::fetchManifest(Manifest& manifest, String& detail) {
     if (!connected()) {
         detail = "Wi-Fi is not connected";
@@ -404,36 +431,20 @@ bool OtaManager::fetchManifest(Manifest& manifest, String& detail) {
         }
     }
 
-    String json;
+    String primaryJson;
     String primaryDetail;
-    if (!fetchManifestUrl(PRIMARY_MANIFEST_URL, json, primaryDetail)) {
-        String backupDetail;
-        if (!fetchManifestUrl(BACKUP_MANIFEST_URL, json, backupDetail)) {
-            detail = "primary: " + primaryDetail + "; backup: " + backupDetail;
-            return false;
-        }
-    }
-    manifest.version = jsonString(json, "version");
-    manifest.hardware = jsonString(json, "hardware");
-    manifest.size = jsonUInt(json, "size");
-    manifest.primaryUrl = jsonString(json, "primary_url");
-    manifest.backupUrl = jsonString(json, "backup_url");
-    manifest.sha256 = jsonString(json, "sha256");
-    manifest.signatureAlgorithm = jsonString(json, "signature_alg");
-    manifest.signature = jsonString(json, "signature");
-    manifest.sha256.toLowerCase();
-    if (manifest.version.isEmpty() || manifest.hardware != HARDWARE_ID ||
-        manifest.size == 0 || manifest.size > MAX_FIRMWARE_BYTES ||
-        !allowedDownloadUrl(manifest.primaryUrl) ||
-        !allowedDownloadUrl(manifest.backupUrl) ||
-        !validSha256(manifest.sha256) || manifest.signature.isEmpty()) {
-        detail = "manifest fields are missing or invalid";
-        return false;
-    }
-    if (!verifyManifestSignature(manifest, detail)) return false;
-    detail = compareVersions(manifest.version, CURRENT_VERSION) > 0
-        ? "signed update available" : "signed manifest is up to date";
-    return true;
+    if (fetchManifestUrl(PRIMARY_MANIFEST_URL, primaryJson, primaryDetail) &&
+        parseAndVerifyManifest(primaryJson, manifest, primaryDetail))
+        return true;
+
+    String backupJson;
+    String backupDetail;
+    if (fetchManifestUrl(BACKUP_MANIFEST_URL, backupJson, backupDetail) &&
+        parseAndVerifyManifest(backupJson, manifest, backupDetail))
+        return true;
+
+    detail = "primary: " + primaryDetail + "; backup: " + backupDetail;
+    return false;
 }
 
 bool OtaManager::checkForUpdate(String& availableVersion, String& detail) {
