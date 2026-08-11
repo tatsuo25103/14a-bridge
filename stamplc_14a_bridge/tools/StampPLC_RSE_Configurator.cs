@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -14,6 +15,27 @@ using Microsoft.Win32;
 
 namespace StampPlcRseConfigurator
 {
+    internal sealed class PortChoice
+    {
+        internal readonly string PortName;
+        internal readonly bool IsSmartPlc;
+        internal readonly string Version;
+
+        internal PortChoice(string portName, bool isSmartPlc, string version)
+        {
+            PortName = portName;
+            IsSmartPlc = isSmartPlc;
+            Version = version ?? "";
+        }
+
+        public override string ToString()
+        {
+            if (!IsSmartPlc) return "[OTHER / UNPROGRAMMED]  " + PortName;
+            string suffix = string.IsNullOrWhiteSpace(Version) ? "" : "  V" + Version.TrimStart('V', 'v');
+            return "[SMARTPLC]  " + PortName + suffix;
+        }
+    }
+
     internal sealed class TechCircularProgress : Control
     {
         private readonly System.Windows.Forms.Timer _spinner = new System.Windows.Forms.Timer { Interval = 35 };
@@ -105,6 +127,7 @@ namespace StampPlcRseConfigurator
         private static readonly Color TextColor = Color.FromArgb(225, 235, 240);
         private static readonly Color Muted = Color.FromArgb(135, 155, 170);
         private readonly ComboBox _ports = new ComboBox();
+        private readonly Button _scanPorts = new Button();
         private readonly Button _connect = new Button();
         private readonly Button _flashFirmware = new Button();
         private readonly Label _connection = new Label();
@@ -138,6 +161,14 @@ namespace StampPlcRseConfigurator
         private volatile bool _flashingFirmware;
         private bool _updatingWifiUi;
         private bool? _pendingAutomaticOta;
+        private volatile bool _scanningPorts;
+
+        private static readonly Regex IdentityPattern = new Regex(
+            @"(?:^|\n)IDENTITY PRODUCT=14A_BRIDGE MODEL=STAMPPLC VERSION=([^\s\r\n]+)",
+            RegexOptions.Multiline | RegexOptions.IgnoreCase);
+        private static readonly Regex LegacyIdentityPattern = new Regex(
+            @"(?:^|\n)@\s+WIFI VERSION=([^\s\r\n]+)",
+            RegexOptions.Multiline | RegexOptions.IgnoreCase);
 
         private static readonly Regex RsePattern = new Regex(
             @"^RSE DI mask:\s*(0x[0-9A-Fa-f]+)\s+level:\s*(\d+%|INVALID)$");
@@ -172,7 +203,7 @@ namespace StampPlcRseConfigurator
             _animationTimer.Tick += delegate { foreach (LiquidGauge gauge in _gauges) if (gauge != null) gauge.AdvanceFrame(); };
             _animationTimer.Start();
             _statusTimer.Tick += delegate { SendBackgroundStatus(); };
-            ScanPorts();
+            Shown += delegate { ScanPorts(); };
             RefreshWifiNetworks();
             ScheduleGuiUpdateCheck();
             FormClosing += delegate { Disconnect(); };
@@ -197,7 +228,7 @@ namespace StampPlcRseConfigurator
 
             var connectionBox = NewGroup("USB Connection");
             var connectionFlow = NewFlow();
-            _ports.Width = 180;
+            _ports.Width = 270;
             _ports.Height = 27;
             _ports.DropDownStyle = ComboBoxStyle.DropDownList;
             _ports.BackColor = Color.FromArgb(7, 13, 19);
@@ -206,12 +237,14 @@ namespace StampPlcRseConfigurator
             _connect.Text = "Connect";
             StyleButton(_connect);
             _connect.Click += ToggleConnection;
-            var scan = NewButton("Scan", delegate { ScanPorts(); });
-            scan.AutoSize = false;
+            _scanPorts.Text = "Scan";
+            StyleButton(_scanPorts);
+            _scanPorts.Click += delegate { ScanPorts(); };
+            _scanPorts.AutoSize = false;
             _connect.AutoSize = false;
-            scan.Size = new Size(76, 26);
+            _scanPorts.Size = new Size(76, 26);
             _connect.Size = new Size(86, 26);
-            scan.Margin = new Padding(4, 0, 0, 0);
+            _scanPorts.Margin = new Padding(4, 0, 0, 0);
             _connect.Margin = new Padding(8, 0, 0, 0);
             connectionFlow.WrapContents = false;
             connectionFlow.AutoSize = false;
@@ -220,7 +253,7 @@ namespace StampPlcRseConfigurator
             _connection.Padding = new Padding(14, 5, 0, 0);
             _connection.Text = "\u25CF  DISCONNECTED";
             _connection.ForeColor = Muted;
-            connectionFlow.Controls.AddRange(new Control[] { _ports, scan, _connect, _connection });
+            connectionFlow.Controls.AddRange(new Control[] { _ports, _scanPorts, _connect, _connection });
             connectionBox.Controls.Add(connectionFlow);
             root.Controls.Add(connectionBox);
 
@@ -519,13 +552,215 @@ namespace StampPlcRseConfigurator
 
         private void ScanPorts()
         {
-            string previous = _ports.Text;
-            string[] ports = SerialPort.GetPortNames();
+            if (_scanningPorts) return;
+            _scanningPorts = true;
+
+            string previous = SelectedPortName();
+            string connectedPort = "";
+            lock (_serialLock)
+                if (_serial != null && _serial.IsOpen) connectedPort = _serial.PortName;
+
+            string[] ports;
+            try
+            {
+                ports = SerialPort.GetPortNames();
+            }
+            catch (Exception ex)
+            {
+                _scanningPorts = false;
+                _connection.Text = "\u25CF  SERIAL PORT SCAN FAILED";
+                _connection.ForeColor = Color.OrangeRed;
+                AppendLog("[SCAN] Windows could not enumerate serial ports: " + ex.Message);
+                return;
+            }
             Array.Sort(ports, StringComparer.OrdinalIgnoreCase);
+            _scanPorts.Enabled = false;
+            _connect.Enabled = false;
+            _ports.Enabled = false;
+            if (string.IsNullOrEmpty(connectedPort))
+            {
+                _connection.Text = "\u25CF  SCANNING " + ports.Length + " SERIAL PORT" + (ports.Length == 1 ? "" : "S") + "...";
+                _connection.ForeColor = Color.Gold;
+            }
+            AppendLog("[SCAN] Checking " + ports.Length + " serial port" + (ports.Length == 1 ? "" : "s") +
+                " for SmartPLC identity (read-only).");
+
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                var choices = new List<PortChoice>();
+                int smartPlcCount = 0;
+                foreach (string port in ports)
+                {
+                    if (!string.IsNullOrEmpty(connectedPort) &&
+                        string.Equals(port, connectedPort, StringComparison.OrdinalIgnoreCase))
+                    {
+                        choices.Add(new PortChoice(port, true, ""));
+                        smartPlcCount++;
+                        continue;
+                    }
+
+                    string version;
+                    bool identified = ProbeSmartPlcPort(port, out version);
+                    choices.Add(new PortChoice(port, identified, version));
+                    if (identified) smartPlcCount++;
+                }
+                choices.Sort(ComparePortChoices);
+
+                if (IsDisposed || Disposing) return;
+                try
+                {
+                    BeginInvoke(new Action(delegate
+                    {
+                        FinishPortScan(choices, previous, connectedPort, smartPlcCount);
+                    }));
+                }
+                catch (InvalidOperationException) { }
+            });
+        }
+
+        private static int ComparePortChoices(PortChoice left, PortChoice right)
+        {
+            if (left.IsSmartPlc != right.IsSmartPlc) return left.IsSmartPlc ? -1 : 1;
+            int leftNumber = PortNumber(left.PortName);
+            int rightNumber = PortNumber(right.PortName);
+            int numeric = leftNumber.CompareTo(rightNumber);
+            return numeric != 0 ? numeric : StringComparer.OrdinalIgnoreCase.Compare(left.PortName, right.PortName);
+        }
+
+        private static int PortNumber(string portName)
+        {
+            int number;
+            return portName.StartsWith("COM", StringComparison.OrdinalIgnoreCase) &&
+                int.TryParse(portName.Substring(3), out number) ? number : int.MaxValue;
+        }
+
+        private static bool TryParseSmartPlcIdentity(string response, out string version)
+        {
+            version = "";
+            Match match = IdentityPattern.Match(response ?? "");
+            if (!match.Success) match = LegacyIdentityPattern.Match(response ?? "");
+            if (!match.Success) return false;
+            version = match.Groups[1].Value;
+            return true;
+        }
+
+        private static string ReadProbeResponse(SerialPort probe, int timeoutMilliseconds)
+        {
+            var response = new StringBuilder();
+            var timer = Stopwatch.StartNew();
+            while (timer.ElapsedMilliseconds < timeoutMilliseconds)
+            {
+                try
+                {
+                    string chunk = probe.ReadExisting();
+                    if (!string.IsNullOrEmpty(chunk))
+                    {
+                        response.Append(chunk.Replace("\r", ""));
+                        if (response.Length > 32768) break;
+                    }
+                }
+                catch (InvalidOperationException) { break; }
+                catch (IOException) { break; }
+                Thread.Sleep(25);
+            }
+            return response.ToString();
+        }
+
+        private static bool ProbeSmartPlcPort(string portName, out string version)
+        {
+            version = "";
+            try
+            {
+                using (var probe = new SerialPort(portName, 115200, Parity.None, 8, StopBits.One)
+                {
+                    NewLine = "\n",
+                    ReadTimeout = 100,
+                    WriteTimeout = 250,
+                    DtrEnable = false,
+                    RtsEnable = false
+                })
+                {
+                    probe.Open();
+                    Thread.Sleep(60);
+                    probe.DiscardInBuffer();
+
+                    // "identify" is read-only and unique to this project. V1.0.2
+                    // devices without that command are detected by the read-only
+                    // legacy "gui" response below.
+                    probe.Write("identify\n");
+                    string response = ReadProbeResponse(probe, 300);
+                    if (TryParseSmartPlcIdentity(response, out version)) return true;
+
+                    probe.Write("gui\n");
+                    response += ReadProbeResponse(probe, 650);
+                    return TryParseSmartPlcIdentity(response, out version);
+                }
+            }
+            catch (UnauthorizedAccessException) { }
+            catch (IOException) { }
+            catch (InvalidOperationException) { }
+            catch (TimeoutException) { }
+            catch (ArgumentException) { }
+            catch (Exception) { }
+            return false;
+        }
+
+        private void FinishPortScan(List<PortChoice> choices, string previous,
+            string connectedPort, int smartPlcCount)
+        {
+            _ports.BeginUpdate();
             _ports.Items.Clear();
-            _ports.Items.AddRange(ports);
-            if (Array.IndexOf(ports, previous) >= 0) _ports.SelectedItem = previous;
-            else if (ports.Length > 0) _ports.SelectedIndex = 0;
+            foreach (PortChoice choice in choices) _ports.Items.Add(choice);
+            _ports.EndUpdate();
+
+            int previousIndex = -1;
+            int firstSmartPlc = -1;
+            for (int i = 0; i < choices.Count; ++i)
+            {
+                if (firstSmartPlc < 0 && choices[i].IsSmartPlc) firstSmartPlc = i;
+                if (string.Equals(choices[i].PortName, previous, StringComparison.OrdinalIgnoreCase))
+                    previousIndex = i;
+            }
+            _ports.SelectedIndex = previousIndex >= 0 ? previousIndex : firstSmartPlc;
+
+            _scanningPorts = false;
+            _scanPorts.Enabled = true;
+            _connect.Enabled = true;
+            bool connected = !string.IsNullOrEmpty(connectedPort);
+            _ports.Enabled = !connected;
+
+            if (!connected)
+            {
+                if (smartPlcCount == 0)
+                {
+                    _connection.Text = "\u25CF  NO SMARTPLC FOUND  (" + choices.Count + " OTHER PORT" +
+                        (choices.Count == 1 ? "" : "S") + ")";
+                    _connection.ForeColor = choices.Count == 0 ? Muted : Color.Orange;
+                }
+                else if (smartPlcCount == 1)
+                {
+                    _connection.Text = "\u25CF  SMARTPLC FOUND  " + SelectedPortName();
+                    _connection.ForeColor = Accent;
+                }
+                else
+                {
+                    _connection.Text = "\u25CF  " + smartPlcCount + " SMARTPLC DEVICES FOUND - SELECT ONE";
+                    _connection.ForeColor = Accent;
+                }
+            }
+            AppendLog("[SCAN] SmartPLC found=" + smartPlcCount + ", other/unavailable=" +
+                (choices.Count - smartPlcCount) + ".");
+        }
+
+        private PortChoice SelectedPortChoice()
+        {
+            return _ports.SelectedItem as PortChoice;
+        }
+
+        private string SelectedPortName()
+        {
+            PortChoice choice = SelectedPortChoice();
+            return choice == null ? "" : choice.PortName;
         }
 
         private void ToggleConnection(object sender, EventArgs e)
@@ -535,15 +770,26 @@ namespace StampPlcRseConfigurator
                 Disconnect();
                 return;
             }
-            if (string.IsNullOrWhiteSpace(_ports.Text))
+            PortChoice selected = SelectedPortChoice();
+            string selectedPort = SelectedPortName();
+            if (string.IsNullOrWhiteSpace(selectedPort))
             {
-                MessageBox.Show(this, "Connect the StampPLC by USB and scan again.", "No COM port",
+                MessageBox.Show(this, "Scan and select an identified SmartPLC first.", "No SmartPLC selected",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (selected == null || !selected.IsSmartPlc)
+            {
+                MessageBox.Show(this,
+                    selectedPort + " did not answer the SmartPLC identity check.\r\n\r\n" +
+                    "Connection is blocked to protect other serial devices. If this is a new, " +
+                    "unprogrammed SmartPLC, use this port only with USB flash.",
+                    "Unidentified serial port", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
             try
             {
-                _serial = new SerialPort(_ports.Text, 115200, Parity.None, 8, StopBits.One)
+                _serial = new SerialPort(selectedPort, 115200, Parity.None, 8, StopBits.One)
                 {
                     NewLine = "\n",
                     ReadTimeout = 200,
@@ -552,10 +798,11 @@ namespace StampPlcRseConfigurator
                 _serial.DataReceived += SerialDataReceived;
                 _serial.Open();
                 _connect.Text = "Disconnect";
-                _connection.Text = "\u25CF  CONNECTED  " + _ports.Text;
+                _ports.Enabled = false;
+                _connection.Text = "\u25CF  CONNECTED  " + selectedPort;
                 _connection.ForeColor = Accent;
                 SetAutomaticOtaStatus(null);
-                AppendLog("[PC] Connected to " + _ports.Text);
+                AppendLog("[PC] Connected to " + selectedPort);
                 _statusTimer.Start();
                 var timer = new System.Windows.Forms.Timer { Interval = 300 };
                 timer.Tick += delegate { timer.Stop(); timer.Dispose(); Send("show"); };
@@ -570,7 +817,8 @@ namespace StampPlcRseConfigurator
         private void FlashFirmware(object sender, EventArgs e)
         {
             if (_flashingFirmware) return;
-            if (string.IsNullOrWhiteSpace(_ports.Text))
+            string selectedPort = SelectedPortName();
+            if (string.IsNullOrWhiteSpace(selectedPort))
             {
                 MessageBox.Show(this, "Select the COM port of the new StampPLC first.",
                     "No COM port", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -597,21 +845,21 @@ namespace StampPlcRseConfigurator
                 return;
             }
             if (MessageBox.Show(this,
-                "SmartPLC firmware " + ReleaseVersion + " will be written to " + _ports.Text + ".\r\n" +
+                "SmartPLC firmware " + ReleaseVersion + " will be written to " + selectedPort + ".\r\n" +
                 "The USB connection will be closed during flashing. Continue?",
                 "Flash StampPLC firmware", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
 
             Disconnect();
             _flashingFirmware = true;
             _flashFirmware.Enabled = false;
-            _connection.Text = "\u25CF  FLASHING " + _ports.Text;
+            _connection.Text = "\u25CF  FLASHING " + selectedPort;
             _connection.ForeColor = Color.FromArgb(255, 184, 55);
             _flashProgress.Indeterminate = true;
             _flashProgress.RingColor = Color.FromArgb(255, 184, 55);
             _flashProgressText.Text = "Connecting / preparing...";
             _flashProgressText.ForeColor = Color.FromArgb(255, 184, 55);
-            AppendLog("[FLASH] Starting firmware update on " + _ports.Text);
-            string port = _ports.Text;
+            AppendLog("[FLASH] Starting firmware update on " + selectedPort);
+            string port = selectedPort;
             ThreadPool.QueueUserWorkItem(delegate
             {
                 int exitCode = -1;
@@ -767,6 +1015,7 @@ namespace StampPlcRseConfigurator
                 }
             }
             _connect.Text = "Connect";
+            _ports.Enabled = !_scanningPorts;
             _connection.Text = "\u25CF  DISCONNECTED";
             _connection.ForeColor = Muted;
             SetAutomaticOtaStatus(null);
@@ -1407,13 +1656,34 @@ namespace StampPlcRseConfigurator
 
         internal static bool SelfTest()
         {
+            string version;
+            var choices = new List<PortChoice>
+            {
+                new PortChoice("COM1", false, ""),
+                new PortChoice("COM7", true, "1.0.2"),
+                new PortChoice("COM2", true, "1.0.1")
+            };
+            choices.Sort(ComparePortChoices);
+            bool multipleDeviceOrder = choices[0].PortName == "COM2" && choices[0].IsSmartPlc &&
+                choices[1].PortName == "COM7" && choices[1].IsSmartPlc &&
+                choices[2].PortName == "COM1" && !choices[2].IsSmartPlc;
             return RsePattern.IsMatch("RSE DI mask: 0x02  level: 60%") &&
                    ModePattern.IsMatch("Mode: DRY-RUN  RS485: 19200 baud  register: 0x04E5  quantity: 2") &&
                    IdPattern.IsMatch("3   yes        10000  10000   6000   3000      0     6000      6000  yes") &&
                    ProbePattern.IsMatch("PROBE ID=3 REGISTER=0x04E5 VALUE=10000 STATUS=OK DETAIL=readback verified") &&
                    WifiPattern.IsMatch("WIFI VERSION=1.0.1 SAVED=yes CONNECTED=yes AUTO=no SSIDHEX=4D4553 IP=192.168.1.2 RSSI=-52") &&
                    OtaAutoPattern.IsMatch("OTA AUTO=yes STATUS=OK DETAIL=saved") &&
-                   OtaAutoPattern.IsMatch("OTA AUTO=no STATUS=ERROR DETAIL=NVS save failed");
+                   OtaAutoPattern.IsMatch("OTA AUTO=no STATUS=ERROR DETAIL=NVS save failed") &&
+                   TryParseSmartPlcIdentity(
+                       "IDENTITY PRODUCT=14A_BRIDGE MODEL=STAMPPLC VERSION=1.0.2\r\n", out version) &&
+                   version == "1.0.2" &&
+                   TryParseSmartPlcIdentity(
+                       "@ WIFI VERSION=1.0.1 SAVED=yes CONNECTED=no AUTO=no SSIDHEX= IP=0.0.0.0 RSSI=0\r\n",
+                       out version) && version == "1.0.1" &&
+                   !TryParseSmartPlcIdentity("AT+GMR\r\nOTHER SERIAL DEVICE\r\n", out version) &&
+                   new PortChoice("COM5", true, "1.0.2").ToString().Contains("[SMARTPLC]") &&
+                   new PortChoice("COM9", false, "").ToString().Contains("UNPROGRAMMED") &&
+                   multipleDeviceOrder;
         }
     }
 

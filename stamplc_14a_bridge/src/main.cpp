@@ -392,6 +392,7 @@ void printHelp() {
     Serial.println();
     Serial.println("14a Bridge - USB configuration");
     Serial.println("Commands:");
+    Serial.println("  identify                     Identify this 14A Bridge SmartPLC");
     Serial.println("  show                         Show configuration and live state");
     Serial.println("  probe all                    FC03-read all enabled inverter IDs");
     Serial.println("  probe <1-6>                  FC03-read one inverter ID");
@@ -498,7 +499,14 @@ bool saveConfig() {
 void processUsbCommand(String line) {
     line.trim();
     if (line.isEmpty()) return;
-    if (!line.equalsIgnoreCase("gui")) Serial.println("> " + line);
+    if (!line.equalsIgnoreCase("gui") && !line.equalsIgnoreCase("identify"))
+        Serial.println("> " + line);
+
+    if (line.equalsIgnoreCase("identify")) {
+        Serial.printf("IDENTITY PRODUCT=14A_BRIDGE MODEL=STAMPPLC VERSION=%s\r\n",
+                      APP_VERSION);
+        return;
+    }
 
     if (line.equalsIgnoreCase("help") || line == "?") {
         printHelp();
