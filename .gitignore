@@ -7,3 +7,5 @@ __pycache__/
 tmp/
 *.log
 .DS_Store
+.release-secrets/
+*ota_private*.pem
