@@ -2,6 +2,8 @@
 #include <M5StamPLC.h>
 #include <Preferences.h>
 #include <SD.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
 #include <time.h>
 
 #include "AppConfig.h"
@@ -48,8 +50,105 @@ float displayedResPercent = 0.0f;
 bool applyInProgress = false;
 uint8_t applyProgress = 0;
 uint8_t applyTotal = 0;
+bool otaBootValidationPending = false;
+uint32_t otaBootValidationDeadline = 0;
+bool inverterControlStarted = false;
 
 void updateDisplay(bool force = false);
+uint8_t readRseMask();
+void probeEnabledInverters(const String& event);
+void handleStableRseState(uint8_t mask, const String& reason);
+void startInverterControl();
+
+void clearOtaBootState() {
+    Preferences p;
+    if (!p.begin("bridgeboot", false)) return;
+    p.clear();
+    p.end();
+}
+
+void rollbackToPreviousApp(uint8_t previousSubtype, const String& reason) {
+    const esp_partition_t* previous = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP,
+        static_cast<esp_partition_subtype_t>(previousSubtype), nullptr);
+    Serial.println("OTA ROLLBACK DETAIL=" + reason);
+    if (previous && esp_ota_set_boot_partition(previous) == ESP_OK) {
+        clearOtaBootState();
+        Serial.flush();
+        delay(300);
+        ESP.restart();
+    }
+    // Never loop forever if the previous partition cannot be selected.  Keep
+    // the current application running and expose the error over USB instead.
+    clearOtaBootState();
+    otaBootValidationPending = false;
+    Serial.println("OTA ROLLBACK ERROR=previous application unavailable");
+}
+
+void prepareOtaBootValidation() {
+    Preferences p;
+    if (!p.begin("bridgeboot", false)) return;
+    const String target = p.getString("target", "");
+    if (target != APP_VERSION) {
+        p.end();
+        return;
+    }
+    const uint8_t previousSubtype = p.getUChar("previous", 0xFF);
+    const uint8_t attempts = p.getUChar("attempts", 0);
+    p.putUChar("attempts", attempts < 255 ? attempts + 1 : attempts);
+    p.end();
+    if (attempts >= 1) {
+        rollbackToPreviousApp(previousSubtype,
+                              "new firmware restarted before validation");
+        return;
+    }
+    otaBootValidationPending = true;
+    otaBootValidationDeadline = millis() + 15000;
+    Serial.println("OTA BOOT STATUS=PENDING_VERIFY VERSION=" + String(APP_VERSION));
+}
+
+void serviceOtaBootValidation() {
+    if (!otaBootValidationPending ||
+        static_cast<int32_t>(millis() - otaBootValidationDeadline) < 0)
+        return;
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    const bool configValid = (config.modbusQuantity == 1 || config.modbusQuantity == 2) &&
+                             config.modbusBaud >= 1200 &&
+                             config.responseTimeoutMs >= 100 &&
+                             config.verifyRetries >= 1 &&
+                             config.verifyRetries <= MAX_WRITE_VERIFY_RETRIES;
+    if (!running || !configValid) {
+        Preferences p;
+        uint8_t previousSubtype = 0xFF;
+        if (p.begin("bridgeboot", true)) {
+            previousSubtype = p.getUChar("previous", 0xFF);
+            p.end();
+        }
+        rollbackToPreviousApp(previousSubtype,
+                              "new firmware self-test failed");
+        return;
+    }
+    const esp_err_t validation = esp_ota_mark_app_valid_cancel_rollback();
+    if (validation != ESP_OK) {
+        Serial.printf("OTA BOOT WARNING=validation state error 0x%X\r\n",
+                      static_cast<unsigned>(validation));
+    }
+    clearOtaBootState();
+    otaBootValidationPending = false;
+    Serial.println("OTA BOOT STATUS=VALID VERSION=" + String(APP_VERSION));
+}
+
+void startInverterControl() {
+    if (inverterControlStarted) return;
+    rawRseMask = readRseMask();
+    stableRseMask = rawRseMask;
+    rawChangedAt = millis();
+    // The first inverter access after an OTA boot is deliberately deferred
+    // until the new application has passed its rollback self-test.
+    probeEnabledInverters("startup_probe");
+    handleStableRseState(stableRseMask, "initial_state");
+    inverterControlStarted = true;
+}
 
 struct TileLayoutAnimation {
     float x = 0;
@@ -420,6 +519,18 @@ void printHelp() {
     Serial.println();
 }
 
+void printOtaDiagnostic(const char* prefix) {
+    const String status = otaManager.lastStatus();
+    const String detailHex = otaManager.lastDetailHex();
+    Serial.printf("%sOTA LAST=%s CHECK=%lu SUCCESS=%lu FAILS=%lu NEXT=%lu DETAILHEX=%s\r\n",
+                  prefix, status.c_str(),
+                  static_cast<unsigned long>(otaManager.lastCheckEpoch()),
+                  static_cast<unsigned long>(otaManager.lastSuccessEpoch()),
+                  static_cast<unsigned long>(otaManager.consecutiveFailures()),
+                  static_cast<unsigned long>(otaManager.nextCheckSeconds()),
+                  detailHex.c_str());
+}
+
 void printStatus() {
     Serial.println();
     Serial.println("=== RSE BRIDGE STATUS ===");
@@ -436,6 +547,7 @@ void printStatus() {
                   otaManager.connected() ? "yes" : "no",
                   otaManager.automatic() ? "yes" : "no",
                   otaManager.ipAddress().c_str(), static_cast<long>(otaManager.rssi()));
+    printOtaDiagnostic("");
     Serial.println("ID  Enabled  MaxPV(W)  100%    60%    30%     0%  LastReq  Readback  OK");
     for (uint8_t i = 0; i < INVERTER_COUNT; ++i) {
         const uint32_t maximum = config.inverters[i].maxPvPowerW;
@@ -468,6 +580,7 @@ void printGuiStatus() {
                   otaManager.automatic() ? "yes" : "no",
                   otaManager.ssidHex().c_str(), otaManager.ipAddress().c_str(),
                   static_cast<long>(otaManager.rssi()));
+    printOtaDiagnostic("@ ");
     for (uint8_t i = 0; i < INVERTER_COUNT; ++i) {
         const uint32_t maximum = config.inverters[i].maxPvPowerW;
         const bool statusOk = inverterHealthy[i] &&
@@ -528,6 +641,7 @@ void processUsbCommand(String line) {
                       otaManager.automatic() ? "yes" : "no",
                       otaManager.ssidHex().c_str(), otaManager.ipAddress().c_str(),
                       static_cast<long>(otaManager.rssi()));
+        printOtaDiagnostic("");
         return;
     }
     if (line.startsWith("wifi sethex ")) {
@@ -1316,6 +1430,7 @@ void setup() {
     M5StamPLC.config(boardConfig);
     M5StamPLC.begin();
     M5StamPLC.setBacklight(true);
+    prepareOtaBootValidation();
     otaManager.begin();
 
     eventLog.begin();
@@ -1332,16 +1447,27 @@ void setup() {
         updateDisplay(true);
     });
     recordSystem("boot", "firmware started");
-    // Read the actual inverter state before evaluating or applying the RSE
-    // command. This is always FC03-only, including when LIVE was saved.
-    probeEnabledInverters("startup_probe");
-    handleStableRseState(stableRseMask, "initial_state");
+    if (!otaBootValidationPending) {
+        startInverterControl();
+    } else {
+        recordSystem("ota_boot", "inverter access held until self-test passes");
+        updateDisplay(true);
+    }
     printHelp();
     printStatus();
 }
 
 void loop() {
     M5StamPLC.update();
+    serviceOtaBootValidation();
+    if (!inverterControlStarted) {
+        if (!otaBootValidationPending) startInverterControl();
+        // Do not accept USB commissioning commands or touch RS485 while a new
+        // OTA image is still inside its rollback validation window.
+        updateDisplay();
+        delay(2);
+        return;
+    }
     serviceUsb();
 
     const uint8_t now = readRseMask();

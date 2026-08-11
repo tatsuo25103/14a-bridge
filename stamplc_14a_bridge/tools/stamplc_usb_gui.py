@@ -117,7 +117,7 @@ class SerialLink:
 class StampPlcConfigurator:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("14a Bridge - Engineering Console V1.0.3")
+        self.root.title("14a Bridge - Engineering Console V1.0.4")
         self.root.geometry("980x760")
         self.root.minsize(840, 650)
 

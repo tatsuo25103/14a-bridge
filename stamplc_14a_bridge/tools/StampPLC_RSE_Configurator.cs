@@ -120,7 +120,7 @@ namespace StampPlcRseConfigurator
 
     internal sealed class MainForm : Form
     {
-        private const string ReleaseVersion = "V1.0.3";
+        private const string ReleaseVersion = "V1.0.4";
         private static readonly Color Surface = Color.FromArgb(16, 22, 30);
         private static readonly Color Panel = Color.FromArgb(25, 34, 45);
         private static readonly Color Accent = Color.FromArgb(0, 220, 210);
@@ -143,6 +143,7 @@ namespace StampPlcRseConfigurator
         private readonly Label _automaticOtaStatus = new Label();
         private readonly Label _wifiStatus = new Label();
         private readonly Label _firmwareStatus = new Label();
+        private readonly Label _otaDiagnosticStatus = new Label();
         private readonly TechCircularProgress _flashProgress = new TechCircularProgress();
         private readonly Label _flashProgressText = new Label();
         private readonly TextBox _log = new TextBox();
@@ -188,6 +189,8 @@ namespace StampPlcRseConfigurator
             @"^OTA STATUS=(OK|ERROR|REBOOT) CURRENT=([^\s]+) AVAILABLE=([^\s]+) DETAIL=(.*)$");
         private static readonly Regex OtaAutoPattern = new Regex(
             @"^OTA AUTO=(yes|no) STATUS=(OK|ERROR)(?: DETAIL=(.*))?$");
+        private static readonly Regex OtaDiagnosticPattern = new Regex(
+            @"^OTA LAST=([A-Z_]+) CHECK=(\d+) SUCCESS=(\d+) FAILS=(\d+) NEXT=(\d+) DETAILHEX=([0-9A-Fa-f]*)$");
 
         internal MainForm()
         {
@@ -285,7 +288,7 @@ namespace StampPlcRseConfigurator
             var settingsLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
             settingsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             settingsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 112));
-            settingsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 96));
+            settingsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 118));
             settingsPage.Controls.Add(settingsLayout);
 
             var configurationBox = NewGroup("Inverter & RS485 settings  |  saved in StampPLC");
@@ -368,12 +371,18 @@ namespace StampPlcRseConfigurator
             _flashProgressText.AutoSize = true;
             _flashProgressText.ForeColor = Muted;
             _flashProgressText.Padding = new Padding(4, 7, 0, 0);
+            _otaDiagnosticStatus.Text = "OTA diagnostics: not read";
+            _otaDiagnosticStatus.AutoSize = true;
+            _otaDiagnosticStatus.MaximumSize = new Size(1040, 0);
+            _otaDiagnosticStatus.ForeColor = Muted;
+            _otaDiagnosticStatus.Padding = new Padding(12, 7, 0, 0);
             firmwareFlow.Controls.AddRange(new Control[]
             {
                 _flashFirmware,
                 NewButton("Check SmartPLC OTA", delegate { Send("ota check"); }),
                 NewButton("Update SmartPLC OTA", InstallOta),
-                _firmwareStatus, _flashProgress, _flashProgressText
+                _firmwareStatus, _flashProgress, _flashProgressText,
+                _otaDiagnosticStatus
             });
             firmwareBox.Controls.Add(firmwareFlow);
             settingsLayout.Controls.Add(firmwareBox, 0, 2);
@@ -1204,6 +1213,19 @@ namespace StampPlcRseConfigurator
             catch { return ""; }
         }
 
+        private static string FormatUnixTime(string value)
+        {
+            long seconds;
+            if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture,
+                out seconds) || seconds <= 0) return "never";
+            try
+            {
+                return new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                    .AddSeconds(seconds).ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+            }
+            catch { return "invalid time"; }
+        }
+
         private static string RunNetsh(string arguments)
         {
             var info = new ProcessStartInfo
@@ -1550,6 +1572,21 @@ namespace StampPlcRseConfigurator
                 _firmwareStatus.ForeColor = match.Groups[1].Value == "ERROR" ? Color.OrangeRed : Accent;
                 return;
             }
+            match = OtaDiagnosticPattern.Match(line.Trim());
+            if (match.Success)
+            {
+                string status = match.Groups[1].Value;
+                string detail = HexUtf8(match.Groups[6].Value);
+                string lastCheck = FormatUnixTime(match.Groups[2].Value);
+                string lastSuccess = FormatUnixTime(match.Groups[3].Value);
+                _otaDiagnosticStatus.Text = "OTA " + status + "  |  checked " + lastCheck +
+                    "  |  last success " + lastSuccess + "  |  failures " + match.Groups[4].Value +
+                    "  |  next " + match.Groups[5].Value + " s" +
+                    (string.IsNullOrWhiteSpace(detail) ? "" : "  |  " + detail);
+                _otaDiagnosticStatus.ForeColor = status == "ERROR" ? Color.OrangeRed :
+                    (status == "NEVER" ? Muted : Accent);
+                return;
+            }
             match = IdPattern.Match(line.Trim());
             if (match.Success)
             {
@@ -1674,6 +1711,7 @@ namespace StampPlcRseConfigurator
                    WifiPattern.IsMatch("WIFI VERSION=1.0.1 SAVED=yes CONNECTED=yes AUTO=no SSIDHEX=4D4553 IP=192.168.1.2 RSSI=-52") &&
                    OtaAutoPattern.IsMatch("OTA AUTO=yes STATUS=OK DETAIL=saved") &&
                    OtaAutoPattern.IsMatch("OTA AUTO=no STATUS=ERROR DETAIL=NVS save failed") &&
+                   OtaDiagnosticPattern.IsMatch("OTA LAST=ERROR CHECK=1786455000 SUCCESS=0 FAILS=2 NEXT=1800 DETAILHEX=544C53206572726F72") &&
                    TryParseSmartPlcIdentity(
                        "IDENTITY PRODUCT=14A_BRIDGE MODEL=STAMPPLC VERSION=1.0.2\r\n", out version) &&
                    version == "1.0.2" &&
@@ -1883,7 +1921,7 @@ namespace StampPlcRseConfigurator
             }
             if (args.Length == 2 && args[0] == "--render-update-prompt")
             {
-                using (var prompt = new GuiUpdatePrompt("V1.0.3", "V1.0.4"))
+                using (var prompt = new GuiUpdatePrompt("V1.0.4", "V1.0.5"))
                 {
                     prompt.Show();
                     Application.DoEvents();

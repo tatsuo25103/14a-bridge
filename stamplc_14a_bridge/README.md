@@ -5,28 +5,30 @@
 - English: [read online](docs/QUICK_START_en.md) | [download Word](docs/14A_Bridge_V1.0.2_Quick_Start_EN.docx)
 - Traditional Chinese: [read online](docs/QUICK_START_zh-TW.md) | [download Word](docs/14A_Bridge_V1.0.2_Quick_Start_zh-TW.docx)
 
-## V1.0.3 release
+## V1.0.4 production OTA release
 
-V1.0.3 adds safe, automatic SmartPLC serial-port identification. The Windows
-GUI scans ports in the background, ignores busy or unrelated serial devices,
-lists multiple connected SmartPLCs separately, and preserves the selected
-device. V1.0.3 also includes the SmartPLC automatic-OTA workflow, persistent
-OTA-state verification, an always-visible firmware version in the SmartPLC
-display header, a clear OTA status in the Windows GUI, a manual settings
-reload, and a verified circular USB-flashing progress indicator. During SmartPLC OTA the
+V1.0.4 hardens OTA for customer deployment. It adds the current Let's Encrypt
+Generation Y trust roots, an MES ECDSA P-256 signed manifest, primary and
+backup GitHub download paths, persistent OTA diagnostics, bounded retry with
+backoff, and first-boot validation with automatic return to the previous app
+after an unconfirmed restart. The Windows GUI displays the last check, last
+success, failure count, next retry, and exact error. V1.0.4 also includes safe
+automatic SmartPLC serial-port identification. During SmartPLC OTA the
 display switches to a dedicated checking, downloading, verifying, installing,
 and restarting screen with download percentage and a keep-power-on warning. Existing inverter,
 RS485, Wi-Fi, and OTA preferences remain stored in NVS across the update.
+Maintainers must follow the [production release checklist](docs/RELEASE_PROCESS.md)
+for every signed firmware release.
 
 For a first-time Windows installation, download and run
-`14a_Bridge_Setup_V1.0.3.exe` from the GitHub release. The installer
+`14a_Bridge_Setup_V1.0.4.exe` from the GitHub release. The installer
 uses the MES icon, installs the USB Configurator, the current StampPLC
 firmware, and a self-contained ESP32-S3 flasher. No Python, PlatformIO, or
 development tools are required on the customer's computer.
 
 To program a new StampPLC, or upgrade V1.0.0 to the OTA partition layout:
 connect it by USB, start the configurator, select its COM port, open
-**Settings**, and click **USB flash V1.0.3**. This writes the controller
+**Settings**, and click **USB flash V1.0.4**. This writes the controller
 firmware and OTA partition table; it does not write any inverter over RS485.
 The NVS addresses are unchanged so existing inverter settings are retained.
 
@@ -198,7 +200,7 @@ The GUI is divided into **Settings** and **Commissioning** tabs. It can:
 - set each inverter's maximum PV power;
 - configure RS485 baud and the power-limit register;
 - synchronize the StampPLC RTC from the PC;
-- install the bundled V1.0.3 firmware over USB with a live circular progress
+- install the bundled V1.0.4 firmware over USB with a live circular progress
   indicator, percentage, completion verification, and clear failure state;
 - select an SSID from the PC's current/saved Wi-Fi profiles, save the
   SmartPLC Wi-Fi credentials, and show connection/IP/RSSI state. Windows may
