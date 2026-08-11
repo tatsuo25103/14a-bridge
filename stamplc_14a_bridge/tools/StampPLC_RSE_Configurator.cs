@@ -120,7 +120,7 @@ namespace StampPlcRseConfigurator
 
     internal sealed class MainForm : Form
     {
-        private const string ReleaseVersion = "V1.0.2";
+        private const string ReleaseVersion = "V1.0.3";
         private static readonly Color Surface = Color.FromArgb(16, 22, 30);
         private static readonly Color Panel = Color.FromArgb(25, 34, 45);
         private static readonly Color Accent = Color.FromArgb(0, 220, 210);
@@ -1883,7 +1883,7 @@ namespace StampPlcRseConfigurator
             }
             if (args.Length == 2 && args[0] == "--render-update-prompt")
             {
-                using (var prompt = new GuiUpdatePrompt("V1.0.2", "V1.0.3"))
+                using (var prompt = new GuiUpdatePrompt("V1.0.3", "V1.0.4"))
                 {
                     prompt.Show();
                     Application.DoEvents();

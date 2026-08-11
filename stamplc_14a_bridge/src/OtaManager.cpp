@@ -11,7 +11,7 @@
 extern const uint8_t githubRootsStart[] asm("_binary_certs_github_roots_pem_start");
 
 namespace {
-constexpr char CURRENT_VERSION[] = "1.0.2";
+constexpr char CURRENT_VERSION[] = "1.0.3";
 constexpr char MANIFEST_URL[] =
     "https://raw.githubusercontent.com/tatsuo25103/14a-bridge/main/"
     "stamplc_14a_bridge/release/ota_manifest.json";
