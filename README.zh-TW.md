@@ -20,12 +20,8 @@ StampPLC 讀取 RSE 的無電位繼電器接點，依每台逆變器的 PV 裝�
 
 ### 1.1 已驗證相容設備
 
-- M5Stack StampPLC
 - FSP PowerManager Hybrid 10 kW
 - FSP PowerManager Hybrid 15 kW
-- 具有無電位繼電器接點，且接點表經現場核准的 RSE
-
-其他 Modbus RTU 逆變器必須先驗證暫存器、資料寬度、縮放及限制行為，才能使用。
 
 ### 1.2 安裝 Windows 程式
 
