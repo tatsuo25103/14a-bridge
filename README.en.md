@@ -23,13 +23,8 @@ by an FC03 readback verification.
 
 ## Verified compatible equipment
 
-- M5Stack StampPLC
 - FSP PowerManager Hybrid 10 kW
 - FSP PowerManager Hybrid 15 kW
-- RSE with potential-free relay contacts and a site-approved contact table
-
-Other Modbus RTU inverters require register, data-width and control-behavior
-validation before use.
 
 ## System overview
 

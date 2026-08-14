@@ -22,15 +22,10 @@ FC03-Rücklesen. Unveränderte Sollwerte werden nicht ständig neu geschrieben.
 
 ## 1. Installation
 
-### 1.1 Geprüfte Geräte
+### 1.1 Verifizierte kompatible Geräte
 
-- M5Stack StampPLC
 - FSP PowerManager Hybrid 10 kW
 - FSP PowerManager Hybrid 15 kW
-- RSE mit potenzialfreien Relaiskontakten und freigegebener Kontakttabelle
-
-Weitere Modbus-RTU-Wechselrichter müssen vor Einsatz hinsichtlich Register,
-Datenbreite, Skalierung und Begrenzungsverhalten geprüft werden.
 
 ### 1.2 Windows-Anwendung installieren
 
