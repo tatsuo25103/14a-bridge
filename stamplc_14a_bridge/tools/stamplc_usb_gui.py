@@ -17,19 +17,23 @@ import serial.tools.list_ports
 
 USB_BAUD = 115200
 ID_LINE = re.compile(
-    r"^(?P<id>[1-6])\s+(?P<enabled>yes|no)\s+"
-    r"(?P<maximum>\d+)\s+\d+\s+\d+\s+\d+\s+\d+\s+"
+    r"^(?P<id>[2-7])\s+(?P<enabled>yes|no)\s+"
+    r"(?P<maximum>\d+)\s+(?P<inverter_limit>\d+)\s+\d+\s+\d+\s+\d+\s+\d+\s+"
     r"(?P<requested>\d+)\s+(?P<readback>\d+)\s+(?P<healthy>yes|no)$"
 )
 RSE_LINE = re.compile(
-    r"^RSE DI mask:\s*(?P<mask>0x[0-9A-Fa-f]+)\s+level:\s*(?P<level>\d+%|INVALID)$"
+    r"^RSE DI mask:\s*(?P<mask>0x[0-9A-Fa-f]+)\s+level:\s*(?P<level>\d+%|INVALID|HOLD)$"
+)
+RSE_PROFILE_LINE = re.compile(
+    r"^RSE PROFILE[:=]\s*(?P<profile>STRICT_4|WESTNETZ_4|EWE_HOLD_4|FNN_EZA_3)$",
+    re.IGNORECASE,
 )
 MODE_LINE = re.compile(
-    r"^Mode:\s*(?P<mode>DRY-RUN|LIVE)\s+RS485:\s*(?P<baud>\d+) baud\s+"
+    r"^Mode:\s*(?P<mode>DRY-RUN|SAFE|TEST|LIVE)\s+RS485:\s*(?P<baud>\d+) baud\s+"
     r"register:\s*(?P<register>0x[0-9A-Fa-f]+)\s+quantity:\s*(?P<quantity>[12])$"
 )
 PROBE_LINE = re.compile(
-    r"^PROBE ID=(?P<id>[1-6]) REGISTER=(?P<register>0x[0-9A-Fa-f]+) "
+    r"^PROBE ID=(?P<id>[2-7]) REGISTER=(?P<register>0x[0-9A-Fa-f]+) "
     r"VALUE=(?P<readback>\d+) STATUS=(?P<status>OK|RETRY|ERROR) DETAIL=(?P<detail>.*)$"
 )
 
@@ -44,7 +48,8 @@ def parse_status_line(line: str) -> ParsedLine | None:
     """Parse one stable, machine-useful line from the firmware `show` output."""
     stripped = line.strip()
     for kind, pattern in (
-        ("inverter", ID_LINE), ("rse", RSE_LINE), ("mode", MODE_LINE),
+        ("inverter", ID_LINE), ("rse", RSE_LINE),
+        ("rse_profile", RSE_PROFILE_LINE), ("mode", MODE_LINE),
         ("probe", PROBE_LINE),
     ):
         match = pattern.match(stripped)
@@ -117,7 +122,7 @@ class SerialLink:
 class StampPlcConfigurator:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("14a Bridge - Engineering Console V1.0.4")
+        self.root.title("14a Bridge - Engineering Console V1.0.6")
         self.root.geometry("980x760")
         self.root.minsize(840, 650)
 
@@ -168,13 +173,13 @@ class StampPlcConfigurator:
 
         devices = ttk.LabelFrame(outer, text="Inverters", padding=10)
         devices.pack(fill="x", pady=(0, 8))
-        headers = ("ID", "Control enabled", "Maximum PV power (W)", "Last target", "Readback", "Status")
+        headers = ("ID", "Control enabled", "Installed PV power (W)", "Last target", "Readback", "Status")
         for column, label in enumerate(headers):
             ttk.Label(devices, text=label, font=("Segoe UI", 9, "bold")).grid(
                 row=0, column=column, padx=6, pady=3
             )
         for i in range(6):
-            ttk.Label(devices, text=str(i + 1)).grid(row=i + 1, column=0, padx=6)
+            ttk.Label(devices, text=str(i + 2)).grid(row=i + 1, column=0, padx=6)
             ttk.Checkbutton(devices, variable=self.enabled_vars[i]).grid(row=i + 1, column=1)
             ttk.Entry(devices, textvariable=self.maximum_vars[i], width=18).grid(
                 row=i + 1, column=2, padx=6, pady=2
@@ -280,8 +285,8 @@ class StampPlcConfigurator:
 
         commands: list[str] = []
         for i in range(6):
-            commands.append(f"id {i + 1} {'on' if self.enabled_vars[i].get() else 'off'}")
-            commands.append(f"max {i + 1} {maxima[i]}")
+            commands.append(f"id {i + 2} {'on' if self.enabled_vars[i].get() else 'off'}")
+            commands.append(f"max {i + 2} {maxima[i]}")
         commands.extend((f"baud {baud}", f"reg 0x{register:04X}", "show"))
         for index, command in enumerate(commands):
             self.root.after(index * 80, lambda value=command: self._send(value))
@@ -358,14 +363,14 @@ class StampPlcConfigurator:
             self.baud_var.set(values["baud"])
             self.register_var.set(values["register"].upper())
         elif parsed.kind == "inverter":
-            index = int(values["id"]) - 1
+            index = int(values["id"]) - 2
             self.enabled_vars[index].set(values["enabled"] == "yes")
             self.maximum_vars[index].set(values["maximum"])
             self.request_vars[index].set(values["requested"] + " W")
             self.readback_vars[index].set(values["readback"] + " W")
             self.health_vars[index].set("OK" if values["healthy"] == "yes" else "CHECK")
         elif parsed.kind == "probe":
-            index = int(values["id"]) - 1
+            index = int(values["id"]) - 2
             self.readback_vars[index].set(values["readback"] + " W")
             self.health_vars[index].set(
                 "FC03 OK" if values["status"] == "OK" else values["status"]

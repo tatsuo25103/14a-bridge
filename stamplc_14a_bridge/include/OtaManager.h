@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <functional>
+#include <time.h>
 
 class OtaManager {
 public:
@@ -11,14 +12,24 @@ public:
     void setProgressCallback(std::function<void(const String&, int)> callback) {
         progressCallback_ = callback;
     }
+    void setLocalClockProvider(
+        std::function<bool(uint32_t&, uint16_t&, uint8_t&)> provider) {
+        localClockProvider_ = provider;
+    }
+    void setRtcSyncCallback(std::function<void(const tm&)> callback) {
+        rtcSyncCallback_ = callback;
+    }
 
     bool saveWifiHex(const String& ssidHex, const String& passwordHex,
                      String& detail);
     bool clearWifi();
     void connectNow();
     bool setAutomatic(bool enabled);
+    bool setSchedule(uint8_t hour, uint8_t minute);
 
     bool automatic() const { return automatic_; }
+    uint8_t scheduleHour() const { return scheduleHour_; }
+    uint8_t scheduleMinute() const { return scheduleMinute_; }
     bool hasCredentials() const { return !ssid_.isEmpty(); }
     bool connected() const;
     String ssidHex() const;
@@ -50,6 +61,13 @@ private:
     String password_;
     bool automatic_ = false;
     uint32_t nextAutomaticCheckMs_ = 0;
+    uint32_t nextScheduledSeconds_ = 0;
+    uint32_t lastScheduleEvaluationMs_ = 0;
+    uint32_t lastRtcSyncMs_ = 0;
+    uint8_t scheduleHour_ = 1;
+    uint8_t scheduleMinute_ = 0;
+    int32_t lastScheduledDay_ = -1;
+    int32_t currentWindowDay_ = -1;
     String lastStatus_ = "NEVER";
     String lastDetail_ = "not checked";
     uint32_t lastCheckEpoch_ = 0;
@@ -57,6 +75,8 @@ private:
     uint32_t consecutiveFailures_ = 0;
     std::function<bool()> safetyCheck_;
     std::function<void(const String&, int)> progressCallback_;
+    std::function<bool(uint32_t&, uint16_t&, uint8_t&)> localClockProvider_;
+    std::function<void(const tm&)> rtcSyncCallback_;
     void reportProgress(const String& stage, int percent = -1);
     void load();
     bool save();

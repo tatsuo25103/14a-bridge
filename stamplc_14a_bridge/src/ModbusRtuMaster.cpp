@@ -39,6 +39,14 @@ void ModbusRtuMaster::transmit(const uint8_t* data, size_t length) {
     digitalWrite(dirPin_, LOW);
 }
 
+void ModbusRtuMaster::responsiveDelay(uint32_t durationMs) {
+    const uint32_t started = millis();
+    while (millis() - started < durationMs) {
+        if (idleCallback_) idleCallback_();
+        delay(1);
+    }
+}
+
 bool ModbusRtuMaster::receive(uint8_t slave, uint8_t function,
                               uint8_t* response, size_t capacity,
                               size_t& length, uint32_t timeoutMs,
@@ -52,6 +60,7 @@ bool ModbusRtuMaster::receive(uint8_t slave, uint8_t function,
             lastByte = millis();
         }
         if (length >= 5 && millis() - lastByte >= 4) break;
+        if (idleCallback_) idleCallback_();
         delay(1);
     }
     if (length < 5) {
@@ -155,7 +164,7 @@ ModbusResult ModbusRtuMaster::writeAndVerify(uint8_t slave, uint16_t address,
         receive(slave, FC_WRITE_MULTIPLE, response, sizeof(response), length,
                 ackTimeoutMs, ackDetail);
 
-        delay(300 + attempt * 250);
+        responsiveDelay(300 + attempt * 250);
         result = readRaw(slave, address, quantity, timeoutMs);
         anyCommunication = anyCommunication || result.communicationOk;
         if (result.ok && result.value == value) {
@@ -170,7 +179,7 @@ ModbusResult ModbusRtuMaster::writeAndVerify(uint8_t slave, uint16_t address,
             lastDetail = result.detail;
             if (!ackDetail.isEmpty()) lastDetail += "; ACK: " + ackDetail;
         }
-        if (attempt + 1 < retries) delay(500 + attempt * 250);
+        if (attempt + 1 < retries) responsiveDelay(500 + attempt * 250);
     }
     result.ok = false;
     result.communicationOk = anyCommunication;

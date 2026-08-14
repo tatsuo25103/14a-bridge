@@ -120,7 +120,7 @@ namespace StampPlcRseConfigurator
 
     internal sealed class MainForm : Form
     {
-        private const string ReleaseVersion = "V1.0.4";
+        private const string ReleaseVersion = "V1.0.6";
         private static readonly Color Surface = Color.FromArgb(16, 22, 30);
         private static readonly Color Panel = Color.FromArgb(25, 34, 45);
         private static readonly Color Accent = Color.FromArgb(0, 220, 210);
@@ -130,17 +130,22 @@ namespace StampPlcRseConfigurator
         private readonly Button _scanPorts = new Button();
         private readonly Button _connect = new Button();
         private readonly Button _flashFirmware = new Button();
+        private readonly Button _smartPlcOta = new Button();
         private readonly Label _connection = new Label();
         private readonly Label _rse = new Label();
         private readonly Label _mode = new Label();
         private readonly Label _result = new Label();
+        private readonly Label _settingsNotice = new Label();
         private readonly DataGridView _grid = new DataGridView();
         private readonly TextBox _baud = new TextBox();
         private readonly TextBox _register = new TextBox();
+        private readonly ComboBox _rseProfile = new ComboBox();
         private readonly ComboBox _wifiSsid = new ComboBox();
         private readonly TextBox _wifiPassword = new TextBox();
         private readonly CheckBox _automaticOta = new CheckBox();
         private readonly Label _automaticOtaStatus = new Label();
+        private readonly DateTimePicker _otaTime = new DateTimePicker();
+        private readonly Label _otaScheduleStatus = new Label();
         private readonly Label _wifiStatus = new Label();
         private readonly Label _firmwareStatus = new Label();
         private readonly Label _otaDiagnosticStatus = new Label();
@@ -150,6 +155,8 @@ namespace StampPlcRseConfigurator
         private readonly FlowLayoutPanel _gaugeFlow = new FlowLayoutPanel();
         private readonly LiquidGauge[] _gauges = new LiquidGauge[6];
         private readonly bool[] _ratingIssues = new bool[6];
+        private readonly bool[] _limitIssues = new bool[6];
+        private readonly bool[] _pvOversizeWarnings = new bool[6];
         private readonly System.Windows.Forms.Timer _animationTimer = new System.Windows.Forms.Timer { Interval = 33 };
         private readonly System.Windows.Forms.Timer _statusTimer = new System.Windows.Forms.Timer { Interval = 1000 };
         private int _rsePercent;
@@ -160,9 +167,16 @@ namespace StampPlcRseConfigurator
         private bool? _dryRun;
         private volatile bool _savingSettings;
         private volatile bool _flashingFirmware;
+        private bool _manualOtaCheckPending;
+        private bool _discoveryActive;
+        private int _discoveryFound;
+        private int _physicalRsePercent = -1;
+        private string _currentMode = "";
         private bool _updatingWifiUi;
         private bool? _pendingAutomaticOta;
         private volatile bool _scanningPorts;
+        private string _connectedFirmwareVersion = "";
+        private int _firstConfiguredId = 2;
 
         private static readonly Regex IdentityPattern = new Regex(
             @"(?:^|\n)IDENTITY PRODUCT=14A_BRIDGE MODEL=STAMPPLC VERSION=([^\s\r\n]+)",
@@ -172,17 +186,26 @@ namespace StampPlcRseConfigurator
             RegexOptions.Multiline | RegexOptions.IgnoreCase);
 
         private static readonly Regex RsePattern = new Regex(
-            @"^RSE DI mask:\s*(0x[0-9A-Fa-f]+)\s+level:\s*(\d+%|INVALID)$");
+            @"^RSE DI mask:\s*(0x[0-9A-Fa-f]+)\s+level:\s*(\d+%|INVALID|HOLD)$");
+        private static readonly Regex RseProfilePattern = new Regex(
+            @"^RSE PROFILE[:=]\s*(STRICT_4|WESTNETZ_4|EWE_HOLD_4|FNN_EZA_3)$",
+            RegexOptions.IgnoreCase);
+        private static readonly Regex OutputPattern = new Regex(
+            @"^Output:\s*(\d+%|UNCHANGED)\s+source:\s*(LIVE|TEST|SAFE|INVALID RSE)$");
         private static readonly Regex ModePattern = new Regex(
-            @"^Mode:\s*(DRY-RUN|LIVE)\s+RS485:\s*(\d+) baud\s+register:\s*(0x[0-9A-Fa-f]+)\s+quantity:\s*([12])$");
+            @"^Mode:\s*(DRY-RUN|SAFE|TEST|LIVE)\s+RS485:\s*(\d+) baud\s+register:\s*(0x[0-9A-Fa-f]+)\s+quantity:\s*([12])$");
         private static readonly Regex IdPattern = new Regex(
+            @"^([2-7])\s+(yes|no)\s+(\d+)\s+(\d+)\s+\d+\s+\d+\s+\d+\s+\d+\s+(\d+)\s+(\d+)\s+(yes|no)$");
+        private static readonly Regex LegacyIdPattern = new Regex(
             @"^([1-6])\s+(yes|no)\s+(\d+)\s+\d+\s+\d+\s+\d+\s+\d+\s+(\d+)\s+(\d+)\s+(yes|no)$");
         private static readonly Regex ProbePattern = new Regex(
-            @"^PROBE ID=([1-6]) REGISTER=(0x[0-9A-Fa-f]+) VALUE=(\d+) STATUS=(OK|RETRY|ERROR) DETAIL=(.*)$");
+            @"^PROBE ID=([1-7]) REGISTER=(0x[0-9A-Fa-f]+) VALUE=(\d+) STATUS=(OK|RETRY|ERROR) DETAIL=(.*)$");
         private static readonly Regex ScanPattern = new Regex(
-            @"^SCAN ID=([1-6]) VALUE=(\d+) STATUS=(FOUND|NO_RESPONSE|ERROR) DETAIL=(.*)$");
+            @"^SCAN ID=([1-7]) VALUE=(\d+) STATUS=(FOUND|NO_RESPONSE|ERROR) DETAIL=(.*)$");
         private static readonly Regex CommitPattern = new Regex(
-            @"^COMMIT ID=([1-6]) STATUS=(OK|CLAMPED|PENDING|ERROR) CONFIG=(\d+) DETAIL=(.*)$");
+            @"^COMMIT ID=([1-7]) STATUS=(OK|CLAMPED|PENDING|ERROR) CONFIG=(\d+) DETAIL=(.*)$");
+        private static readonly Regex RatingPattern = new Regex(
+            @"^RATING ID=([1-7]) STATUS=(VERIFIED|PENDING)$");
         private static readonly Regex WifiPattern = new Regex(
             @"^WIFI VERSION=([^\s]+) SAVED=(yes|no) CONNECTED=(yes|no) AUTO=(yes|no) SSIDHEX=([^\s]*) IP=([^\s]+) RSSI=(-?\d+)$");
         private static readonly Regex OtaPattern = new Regex(
@@ -191,6 +214,8 @@ namespace StampPlcRseConfigurator
             @"^OTA AUTO=(yes|no) STATUS=(OK|ERROR)(?: DETAIL=(.*))?$");
         private static readonly Regex OtaDiagnosticPattern = new Regex(
             @"^OTA LAST=([A-Z_]+) CHECK=(\d+) SUCCESS=(\d+) FAILS=(\d+) NEXT=(\d+) DETAILHEX=([0-9A-Fa-f]*)$");
+        private static readonly Regex OtaSchedulePattern = new Regex(
+            @"^OTA SCHEDULE=(\d{2}):(\d{2}) WINDOW=(\d+) CLOCK=(OK|INVALID)$");
 
         internal MainForm()
         {
@@ -206,10 +231,40 @@ namespace StampPlcRseConfigurator
             _animationTimer.Tick += delegate { foreach (LiquidGauge gauge in _gauges) if (gauge != null) gauge.AdvanceFrame(); };
             _animationTimer.Start();
             _statusTimer.Tick += delegate { SendBackgroundStatus(); };
-            Shown += delegate { ScanPorts(); };
+            Shown += delegate
+            {
+                // WinForms can report the design-time grid width before the
+                // first real layout pass. Recalculate once the final client
+                // size and DPI are known so Readback and Status stay visible.
+                LayoutGridColumns();
+                BeginInvoke(new Action(LayoutGridColumns));
+                ScanPorts();
+            };
             RefreshWifiNetworks();
             ScheduleGuiUpdateCheck();
-            FormClosing += delegate { Disconnect(); };
+            FormClosing += OnFormClosing;
+        }
+
+        private void OnFormClosing(object sender, FormClosingEventArgs e)
+        {
+            if (_flashingFirmware)
+            {
+                e.Cancel = true;
+                _flashProgressText.Text = "Firmware writing is active - keep power and USB connected";
+                _flashProgressText.ForeColor = Color.FromArgb(255, 184, 55);
+                AppendLog("[FLASH] Close ignored while firmware writing is active.");
+                return;
+            }
+            _animationTimer.Stop();
+            _statusTimer.Stop();
+            Disconnect();
+        }
+
+        private void SafeBeginInvoke(Delegate method, params object[] args)
+        {
+            if (IsDisposed || Disposing || !IsHandleCreated) return;
+            try { BeginInvoke(method, args); }
+            catch (InvalidOperationException) { }
         }
 
         private void BuildUi()
@@ -287,32 +342,64 @@ namespace StampPlcRseConfigurator
 
             var settingsLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
             settingsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            settingsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 112));
+            settingsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 145));
             settingsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 118));
             settingsPage.Controls.Add(settingsLayout);
 
             var configurationBox = NewGroup("Inverter & RS485 settings  |  saved in StampPLC");
-            var configurationLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
+            var configurationLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
             configurationLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            configurationLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+            configurationLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+            configurationLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
             ConfigureGrid();
             configurationLayout.Controls.Add(_grid, 0, 0);
-            var settingsFlow = NewFlow();
+            var settingsDetailsFlow = NewFlow();
+            settingsDetailsFlow.AutoSize = false;
+            settingsDetailsFlow.WrapContents = false;
+            var settingsActionsFlow = NewFlow();
+            settingsActionsFlow.AutoSize = false;
+            settingsActionsFlow.WrapContents = false;
             _baud.Width = 90;
             _baud.Text = "19200";
             StyleTextBox(_baud);
             _register.Width = 90;
             _register.Text = "0x04E5";
             StyleTextBox(_register);
-            settingsFlow.Controls.AddRange(new Control[]
+            _rseProfile.Width = 225;
+            _rseProfile.DropDownStyle = ComboBoxStyle.DropDownList;
+            _rseProfile.BackColor = Color.FromArgb(7, 13, 19);
+            _rseProfile.ForeColor = TextColor;
+            _rseProfile.FlatStyle = FlatStyle.Flat;
+            _rseProfile.Items.AddRange(new object[]
+            {
+                "Strict 4-contact (legacy)",
+                "Westnetz 4-contact",
+                "EWE 4-contact (hold last)",
+                "VDE FNN / Netze BW 3-contact"
+            });
+            _rseProfile.SelectedIndex = 0;
+            _rseProfile.Enabled = false;
+            _settingsNotice.Text = "Ready | offline inverter settings remain pending";
+            _settingsNotice.AutoSize = false;
+            _settingsNotice.Size = new Size(300, 36);
+            _settingsNotice.AutoEllipsis = true;
+            _settingsNotice.ForeColor = Muted;
+            _settingsNotice.Padding = new Padding(8, 7, 2, 0);
+            settingsDetailsFlow.Controls.AddRange(new Control[]
             {
                 NewTextLabel("RS485 baud"), _baud,
                 NewTextLabel("Power register"), _register,
+                NewTextLabel("RSE profile"), _rseProfile
+            });
+            settingsActionsFlow.Controls.AddRange(new Control[]
+            {
+                NewButton("First-time discovery", DiscoverInverters),
                 NewButton("Save inverter settings", SaveAll),
                 NewButton("Read SmartPLC settings", ReadSmartPlcSettings),
-                NewTextLabel("Offline inverter settings remain pending")
+                _settingsNotice
             });
-            configurationLayout.Controls.Add(settingsFlow, 0, 1);
+            configurationLayout.Controls.Add(settingsDetailsFlow, 0, 1);
+            configurationLayout.Controls.Add(settingsActionsFlow, 0, 2);
             configurationBox.Controls.Add(configurationLayout);
             settingsLayout.Controls.Add(configurationBox, 0, 0);
 
@@ -336,6 +423,15 @@ namespace StampPlcRseConfigurator
             _automaticOtaStatus.AutoSize = true;
             _automaticOtaStatus.ForeColor = Muted;
             _automaticOtaStatus.Padding = new Padding(8, 7, 8, 0);
+            _otaTime.Format = DateTimePickerFormat.Custom;
+            _otaTime.CustomFormat = "HH:mm";
+            _otaTime.ShowUpDown = true;
+            _otaTime.Width = 72;
+            _otaTime.Value = DateTime.Today.AddHours(1);
+            _otaScheduleStatus.Text = "OTA time: 01:00  |  clock not read";
+            _otaScheduleStatus.AutoSize = true;
+            _otaScheduleStatus.ForeColor = Muted;
+            _otaScheduleStatus.Padding = new Padding(8, 7, 8, 0);
             _wifiStatus.Text = "Not read";
             _wifiStatus.AutoSize = true;
             _wifiStatus.ForeColor = Muted;
@@ -347,7 +443,11 @@ namespace StampPlcRseConfigurator
                 NewTextLabel("Password"), _wifiPassword,
                 NewButton("Save & connect", SaveWifi),
                 NewButton("Retry connection", delegate { Send("wifi connect"); }),
-                _automaticOta, _automaticOtaStatus, _wifiStatus
+                _automaticOta, _automaticOtaStatus,
+                NewTextLabel("OTA time"), _otaTime,
+                NewButton("Save OTA time", SaveOtaTime),
+                NewButton("Sync clock from PC", SyncTime),
+                _otaScheduleStatus, _wifiStatus
             });
             wifiBox.Controls.Add(wifiFlow);
             settingsLayout.Controls.Add(wifiBox, 0, 1);
@@ -359,6 +459,10 @@ namespace StampPlcRseConfigurator
             StyleButton(_flashFirmware);
             _flashFirmware.AutoSize = true;
             _flashFirmware.Click += FlashFirmware;
+            _smartPlcOta.Text = "Check SmartPLC update";
+            _smartPlcOta.AutoSize = true;
+            StyleButton(_smartPlcOta);
+            _smartPlcOta.Click += CheckSmartPlcOta;
             _firmwareStatus.Text = "Installed firmware: --";
             _firmwareStatus.AutoSize = true;
             _firmwareStatus.ForeColor = Muted;
@@ -379,8 +483,7 @@ namespace StampPlcRseConfigurator
             firmwareFlow.Controls.AddRange(new Control[]
             {
                 _flashFirmware,
-                NewButton("Check SmartPLC OTA", delegate { Send("ota check"); }),
-                NewButton("Update SmartPLC OTA", InstallOta),
+                _smartPlcOta,
                 _firmwareStatus, _flashProgress, _flashProgressText,
                 _otaDiagnosticStatus
             });
@@ -416,7 +519,7 @@ namespace StampPlcRseConfigurator
             _gaugeFlow.Padding = new Padding(5, 2, 5, 2);
             for (int i = 0; i < _gauges.Length; ++i)
             {
-                _gauges[i] = new LiquidGauge(i + 1) { Visible = false };
+                _gauges[i] = new LiquidGauge(i + 2) { Visible = false };
                 _gaugeFlow.Controls.Add(_gauges[i]);
             }
             displayLayout.Controls.Add(_gaugeFlow, 0, 1);
@@ -427,7 +530,6 @@ namespace StampPlcRseConfigurator
             var actionFlow = NewFlow();
             actionFlow.WrapContents = false;
             actionFlow.AutoSize = false;
-            actionFlow.Controls.Add(NewButton("Scan all IDs", delegate { Send("scan all"); }));
             foreach (int level in new[] { 100, 60, 30, 0 })
             {
                 int captured = level;
@@ -458,7 +560,11 @@ namespace StampPlcRseConfigurator
             _grid.AllowUserToAddRows = false;
             _grid.AllowUserToDeleteRows = false;
             _grid.RowHeadersVisible = false;
-            _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+            // Do not let WinForms recalculate Fill columns while scan/status
+            // text is changing. On some DPI/layout combinations that could
+            // temporarily push the final Status column outside the viewport.
+            _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
+            _grid.ScrollBars = ScrollBars.Vertical;
             _grid.BackgroundColor = Color.FromArgb(8, 13, 19);
             _grid.BorderStyle = BorderStyle.None;
             _grid.GridColor = Color.FromArgb(55, 75, 90);
@@ -480,27 +586,61 @@ namespace StampPlcRseConfigurator
             _grid.CellValueChanged += delegate(object sender, DataGridViewCellEventArgs e)
             {
                 if (e.RowIndex >= 0 && _grid.Columns[e.ColumnIndex].Name == "Maximum")
+                {
                     _ratingIssues[e.RowIndex] = false;
+                    RefreshPvWarning(e.RowIndex);
+                }
+                if (e.RowIndex >= 0 && _grid.Columns[e.ColumnIndex].Name == "InverterLimit")
+                {
+                    _limitIssues[e.RowIndex] = false;
+                    RefreshPvWarning(e.RowIndex);
+                }
                 UpdateGauges();
             };
             _grid.CellPainting += delegate(object sender, DataGridViewCellPaintingEventArgs e)
             {
-                if (e.RowIndex < 0 || e.ColumnIndex < 0 || !_ratingIssues[e.RowIndex] ||
-                    _grid.Columns[e.ColumnIndex].Name != "Maximum") return;
+                if (e.RowIndex < 0 || e.ColumnIndex < 0 ||
+                    (_grid.Columns[e.ColumnIndex].Name != "Maximum" &&
+                     _grid.Columns[e.ColumnIndex].Name != "InverterLimit")) return;
+                bool maximumCell = _grid.Columns[e.ColumnIndex].Name == "Maximum";
+                bool error = maximumCell ? _ratingIssues[e.RowIndex] : _limitIssues[e.RowIndex];
+                bool warning = maximumCell && _pvOversizeWarnings[e.RowIndex];
+                if (!error && !warning) return;
                 e.Paint(e.CellBounds, e.PaintParts);
-                using (var pen = new Pen(Color.FromArgb(255, 70, 80), 2F))
+                Color border = error
+                    ? Color.FromArgb(255, 70, 80) : Color.FromArgb(255, 184, 55);
+                using (var pen = new Pen(border, 2F))
                     e.Graphics.DrawRectangle(pen, e.CellBounds.X + 1, e.CellBounds.Y + 1,
                         e.CellBounds.Width - 3, e.CellBounds.Height - 3);
                 e.Handled = true;
             };
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Id", HeaderText = "Modbus ID", ReadOnly = true, FillWeight = 55 });
-            _grid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "Control enabled", FillWeight = 80 });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Maximum", HeaderText = "Maximum PV power (W)", FillWeight = 130 });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Id", HeaderText = "Modbus ID", ReadOnly = true });
+            _grid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "Control enabled" });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Maximum", HeaderText = "Installed PV power (W)" });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "InverterLimit", HeaderText = "Inverter rated max (W)" });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Target", HeaderText = "Last target", ReadOnly = true });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Readback", HeaderText = "Readback", ReadOnly = true });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Health", HeaderText = "Status", ReadOnly = true, FillWeight = 70 });
-            for (int id = 1; id <= 6; ++id)
-                _grid.Rows.Add(id.ToString(CultureInfo.InvariantCulture), false, "10000", "--", "--", "--");
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Health", HeaderText = "Status", ReadOnly = true });
+            for (int id = 2; id <= 7; ++id)
+                _grid.Rows.Add(id.ToString(CultureInfo.InvariantCulture), false, "10000", "--", "--", "--", "--");
+            _grid.SizeChanged += delegate { LayoutGridColumns(); };
+            LayoutGridColumns();
+        }
+
+        private void LayoutGridColumns()
+        {
+            if (_grid.Columns.Count != 7 || _grid.ClientSize.Width <= 0) return;
+            int available = Math.Max(700, _grid.ClientSize.Width - 2);
+            int[] percent = { 9, 12, 18, 18, 15, 15, 13 };
+            int used = 0;
+            for (int i = 0; i < _grid.Columns.Count; ++i)
+            {
+                int width = i == _grid.Columns.Count - 1
+                    ? available - used
+                    : available * percent[i] / 100;
+                _grid.Columns[i].Width = Math.Max(70, width);
+                used += _grid.Columns[i].Width;
+            }
         }
 
         private static GroupBox NewGroup(string title)
@@ -546,13 +686,28 @@ namespace StampPlcRseConfigurator
             return new Label { Text = text, AutoSize = true, ForeColor = Muted, Padding = new Padding(8, 7, 2, 0) };
         }
 
+        private void ShowInlineNotice(string text, Color color, string logPrefix)
+        {
+            if (InvokeRequired)
+            {
+                SafeBeginInvoke(new Action<string, Color, string>(ShowInlineNotice),
+                    text, color, logPrefix);
+                return;
+            }
+            _result.Text = text;
+            _result.ForeColor = color;
+            _settingsNotice.Text = text;
+            _settingsNotice.ForeColor = color;
+            if (!string.IsNullOrWhiteSpace(logPrefix))
+                AppendLog(logPrefix + " " + text);
+        }
+
         private Control BuildHeader()
         {
             var header = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(6, 10, 15), BorderStyle = BorderStyle.FixedSingle };
-            var logo = new PictureBox { Dock = DockStyle.Right, Width = 185, SizeMode = PictureBoxSizeMode.Zoom, Cursor = Cursors.Hand, Margin = new Padding(8) };
+            var logo = new PictureBox { Dock = DockStyle.Right, Width = 185, SizeMode = PictureBoxSizeMode.Zoom, Margin = new Padding(8) };
             string logoPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "mes_logo_light.png");
             if (File.Exists(logoPath)) logo.Image = Image.FromFile(logoPath);
-            logo.Click += delegate { MessageBox.Show(this, "MES website link can be set after you provide the URL.", "MES"); };
             var title = new Label { Text = "14A  BRIDGE   " + ReleaseVersion, AutoSize = true, Location = new Point(18, 16), Font = new Font("Segoe UI Semibold", 16F), ForeColor = TextColor };
             var subtitle = new Label { Text = "STAMPPLC  |  USB CONFIGURATION CONSOLE  |  RS485 / MODBUS RTU", AutoSize = true, Location = new Point(21, 46), Font = new Font("Consolas", 9F), ForeColor = Accent };
             header.Controls.AddRange(new Control[] { logo, title, subtitle });
@@ -618,7 +773,7 @@ namespace StampPlcRseConfigurator
                 if (IsDisposed || Disposing) return;
                 try
                 {
-                    BeginInvoke(new Action(delegate
+                    SafeBeginInvoke(new Action(delegate
                     {
                         FinishPortScan(choices, previous, connectedPort, smartPlcCount);
                     }));
@@ -641,6 +796,11 @@ namespace StampPlcRseConfigurator
             int number;
             return portName.StartsWith("COM", StringComparison.OrdinalIgnoreCase) &&
                 int.TryParse(portName.Substring(3), out number) ? number : int.MaxValue;
+        }
+
+        private static bool ShouldAutoConnect(int smartPlcCount, bool alreadyConnected)
+        {
+            return smartPlcCount == 1 && !alreadyConnected;
         }
 
         private static bool TryParseSmartPlcIdentity(string response, out string version)
@@ -730,7 +890,13 @@ namespace StampPlcRseConfigurator
                 if (string.Equals(choices[i].PortName, previous, StringComparison.OrdinalIgnoreCase))
                     previousIndex = i;
             }
-            _ports.SelectedIndex = previousIndex >= 0 ? previousIndex : firstSmartPlc;
+            // Prefer an identified SmartPLC over a previously selected
+            // unrelated COM port. This guarantees that single-device
+            // auto-connect can never target the wrong serial device.
+            _ports.SelectedIndex = firstSmartPlc >= 0
+                ? (previousIndex >= 0 && choices[previousIndex].IsSmartPlc
+                    ? previousIndex : firstSmartPlc)
+                : previousIndex;
 
             _scanningPorts = false;
             _scanPorts.Enabled = true;
@@ -759,6 +925,13 @@ namespace StampPlcRseConfigurator
             }
             AppendLog("[SCAN] SmartPLC found=" + smartPlcCount + ", other/unavailable=" +
                 (choices.Count - smartPlcCount) + ".");
+            if (ShouldAutoConnect(smartPlcCount, connected))
+            {
+                _connection.Text = "\u25CF  SMARTPLC FOUND  " + SelectedPortName() + "  |  CONNECTING...";
+                _connection.ForeColor = Accent;
+                AppendLog("[SCAN] One SmartPLC found; connecting automatically.");
+                ToggleConnection(this, EventArgs.Empty);
+            }
         }
 
         private PortChoice SelectedPortChoice()
@@ -783,17 +956,18 @@ namespace StampPlcRseConfigurator
             string selectedPort = SelectedPortName();
             if (string.IsNullOrWhiteSpace(selectedPort))
             {
-                MessageBox.Show(this, "Scan and select an identified SmartPLC first.", "No SmartPLC selected",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _connection.Text = "\u25CF  SELECT AN IDENTIFIED SMARTPLC FIRST";
+                _connection.ForeColor = Color.FromArgb(255, 184, 55);
+                ShowInlineNotice("Scan and select an identified SmartPLC first.",
+                    Color.FromArgb(255, 184, 55), "[USB]");
                 return;
             }
             if (selected == null || !selected.IsSmartPlc)
             {
-                MessageBox.Show(this,
-                    selectedPort + " did not answer the SmartPLC identity check.\r\n\r\n" +
-                    "Connection is blocked to protect other serial devices. If this is a new, " +
-                    "unprogrammed SmartPLC, use this port only with USB flash.",
-                    "Unidentified serial port", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _connection.Text = "\u25CF  " + selectedPort + " IS NOT AN IDENTIFIED SMARTPLC";
+                _connection.ForeColor = Color.FromArgb(255, 184, 55);
+                ShowInlineNotice("Connection blocked to protect the other serial device. Use USB flash only if this is an unprogrammed SmartPLC.",
+                    Color.FromArgb(255, 184, 55), "[USB]");
                 return;
             }
             try
@@ -808,8 +982,8 @@ namespace StampPlcRseConfigurator
                 _serial.Open();
                 _connect.Text = "Disconnect";
                 _ports.Enabled = false;
-                _connection.Text = "\u25CF  CONNECTED  " + selectedPort;
-                _connection.ForeColor = Accent;
+                ApplyFirmwareProtocol(selected.Version);
+                UpdateConnectedText();
                 SetAutomaticOtaStatus(null);
                 AppendLog("[PC] Connected to " + selectedPort);
                 _statusTimer.Start();
@@ -819,7 +993,9 @@ namespace StampPlcRseConfigurator
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "Connection failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                _connection.Text = "\u25CF  CONNECTION FAILED  " + selectedPort;
+                _connection.ForeColor = Color.OrangeRed;
+                ShowInlineNotice("Connection failed: " + ex.Message, Color.OrangeRed, "[USB]");
             }
         }
 
@@ -829,8 +1005,8 @@ namespace StampPlcRseConfigurator
             string selectedPort = SelectedPortName();
             if (string.IsNullOrWhiteSpace(selectedPort))
             {
-                MessageBox.Show(this, "Select the COM port of the new StampPLC first.",
-                    "No COM port", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                ShowInlineNotice("Select the COM port of the SmartPLC before flashing.",
+                    Color.FromArgb(255, 184, 55), "[FLASH]");
                 return;
             }
             string appDirectory = AppDomain.CurrentDomain.BaseDirectory;
@@ -848,9 +1024,10 @@ namespace StampPlcRseConfigurator
                 File.Exists(platformIo);
             if (!hasBundledFlasher && !hasEngineeringFlasher)
             {
-                MessageBox.Show(this,
-                    "Firmware files are missing. Reinstall the 14a Bridge package.",
-                    "Flashing runtime not found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _firmwareStatus.Text = "FLASH UNAVAILABLE - firmware files are missing; reinstall the package";
+                _firmwareStatus.ForeColor = Color.OrangeRed;
+                ShowInlineNotice("Firmware files are missing. Reinstall the 14a Bridge package.",
+                    Color.OrangeRed, "[FLASH]");
                 return;
             }
             if (MessageBox.Show(this,
@@ -902,7 +1079,7 @@ namespace StampPlcRseConfigurator
                             (int)Math.Max(0, Math.Min(100, completedBytes * 100 / totalImageBytes));
                         if (overall == lastReportedProgress) return;
                         lastReportedProgress = overall;
-                        BeginInvoke(new Action(delegate
+                        SafeBeginInvoke(new Action(delegate
                         {
                             _flashProgress.Indeterminate = false;
                             _flashProgress.RingColor = Accent;
@@ -919,7 +1096,7 @@ namespace StampPlcRseConfigurator
                         diagnosticTail.Enqueue(line);
                         while (diagnosticTail.Count > 10) diagnosticTail.Dequeue();
                     }
-                    BeginInvoke(new Action<string>(AppendLog), "[FLASH] " + line);
+                    SafeBeginInvoke(new Action<string>(AppendLog), "[FLASH] " + line);
                 };
                 try
                 {
@@ -958,13 +1135,13 @@ namespace StampPlcRseConfigurator
                 }
                 catch (Exception ex)
                 {
-                    BeginInvoke(new Action<string>(AppendLog), "[FLASH ERROR] " + ex.Message);
+                    SafeBeginInvoke(new Action<string>(AppendLog), "[FLASH ERROR] " + ex.Message);
                 }
-                BeginInvoke(new Action(delegate
+                SafeBeginInvoke(new Action(delegate
                 {
                     _flashingFirmware = false;
                     _flashFirmware.Enabled = true;
-                    ScanPorts();
+                    if (exitCode != 0) ScanPorts();
                     _connection.Text = exitCode == 0 ? "\u25CF  FLASH COMPLETE" : "\u25CF  FLASH FAILED";
                     _connection.ForeColor = exitCode == 0 ? Accent : Color.OrangeRed;
                     _flashProgress.Indeterminate = false;
@@ -979,19 +1156,29 @@ namespace StampPlcRseConfigurator
                         : "[FLASH] Failed. Check the COM port and USB cable, then retry.");
                     if (exitCode == 0)
                     {
-                        MessageBox.Show(this,
-                            "SmartPLC firmware " + ReleaseVersion + " was written and verified successfully.\r\n\r\n" +
-                            "Saved inverter and RS485 settings remain unchanged. Reconnect USB to continue.",
-                            "Firmware flash complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        ShowInlineNotice("Firmware " + ReleaseVersion +
+                            " written and verified. Reconnect USB to continue.", Accent, "[FLASH]");
+                        // ESP32-S3 USB disappears while rebooting. A scan
+                        // started immediately after esptool exits can see the
+                        // COM port before the application identity is ready.
+                        // Wait, then scan; a single SmartPLC auto-connects.
+                        var reconnectTimer = new System.Windows.Forms.Timer { Interval = 3000 };
+                        reconnectTimer.Tick += delegate
+                        {
+                            reconnectTimer.Stop();
+                            reconnectTimer.Dispose();
+                            ScanPorts();
+                        };
+                        reconnectTimer.Start();
                     }
                     else
                     {
                         string details;
                         lock (diagnosticLock) details = string.Join("\r\n", diagnosticTail.ToArray());
-                        MessageBox.Show(this,
-                            "Firmware flashing failed.\r\n\r\n" + details +
-                            "\r\n\r\nThe complete output is available on the Commissioning tab.",
-                            "Firmware flash failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        ShowInlineNotice("Firmware flashing failed. See Device Event Log for details.",
+                            Color.OrangeRed, "[FLASH]");
+                        if (!string.IsNullOrWhiteSpace(details))
+                            AppendLog("[FLASH DETAILS] " + details.Replace("\r\n", " | "));
                     }
                 }));
             });
@@ -1027,6 +1214,9 @@ namespace StampPlcRseConfigurator
             _ports.Enabled = !_scanningPorts;
             _connection.Text = "\u25CF  DISCONNECTED";
             _connection.ForeColor = Muted;
+            _connectedFirmwareVersion = "";
+            _rseProfile.Enabled = false;
+            _rseProfile.SelectedIndex = 0;
             SetAutomaticOtaStatus(null);
         }
 
@@ -1045,13 +1235,13 @@ namespace StampPlcRseConfigurator
                         if (newline < 0) break;
                         string line = all.Substring(0, newline);
                         _receiveBuffer.Remove(0, newline + 1);
-                        BeginInvoke(new Action<string>(HandleLine), line);
+                        SafeBeginInvoke(new Action<string>(HandleLine), line);
                     }
                 }
             }
             catch (Exception ex)
             {
-                BeginInvoke(new Action<string>(delegate(string message)
+                SafeBeginInvoke(new Action<string>(delegate(string message)
                 {
                     AppendLog("[USB ERROR] " + message);
                     Disconnect();
@@ -1065,8 +1255,8 @@ namespace StampPlcRseConfigurator
             {
                 if (_serial == null || !_serial.IsOpen)
                 {
-                    MessageBox.Show(this, "Connect to the StampPLC first.", "Not connected",
-                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    ShowInlineNotice("Connect to the SmartPLC first.",
+                        Color.FromArgb(255, 184, 55), "[USB]");
                     return false;
                 }
                 try
@@ -1077,7 +1267,8 @@ namespace StampPlcRseConfigurator
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show(this, ex.Message, "USB error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    ShowInlineNotice("USB communication error: " + ex.Message,
+                        Color.OrangeRed, "[USB]");
                     return false;
                 }
             }
@@ -1095,36 +1286,68 @@ namespace StampPlcRseConfigurator
 
         private void SaveAll(object sender, EventArgs e)
         {
-            var commands = new string[9];
-            int commandIndex = 2;
+            var commands = new List<string>();
+            uint baud;
+            ushort address;
             for (int row = 0; row < 6; ++row)
             {
                 bool enabled = Convert.ToBoolean(_grid.Rows[row].Cells["Enabled"].Value ?? false);
+                int id;
+                if (!int.TryParse(Convert.ToString(_grid.Rows[row].Cells["Id"].Value), out id))
+                {
+                    ShowInlineNotice("Internal Modbus ID layout is invalid; settings were not sent.",
+                        Color.OrangeRed, "[SETTINGS]");
+                    return;
+                }
                 uint maximum;
                 if (!uint.TryParse(Convert.ToString(_grid.Rows[row].Cells["Maximum"].Value), out maximum) || maximum == 0)
                 {
-                    MessageBox.Show(this, "ID " + (row + 1) + " maximum power is invalid.",
-                        "Invalid setting", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    _ratingIssues[row] = true;
+                    _grid.InvalidateCell(_grid.Rows[row].Cells["Maximum"]);
+                    ShowInlineNotice("ID " + id + " installed PV power must be a positive whole number in watts.",
+                        Color.OrangeRed, "[SETTINGS]");
                     return;
                 }
-                commands[commandIndex++] = "commit " + (row + 1) + " " + (enabled ? "on" : "off") + " " + maximum;
+                uint inverterLimit = ParseWatts(_grid.Rows[row].Cells["InverterLimit"].Value);
+                if (enabled && inverterLimit == 0)
+                {
+                    _limitIssues[row] = true;
+                    _grid.InvalidateCell(_grid.Rows[row].Cells["InverterLimit"]);
+                    ShowInlineNotice("ID " + id + " inverter rated maximum must be entered before control is enabled.",
+                        Color.OrangeRed, "[SETTINGS]");
+                    return;
+                }
+                if (inverterLimit > 0)
+                    commands.Add("limit " + id + " " + inverterLimit + " CONFIRM");
+                commands.Add("commit " + id + " " + (enabled ? "on" : "off") + " " + maximum);
             }
-            uint baud;
             if (!uint.TryParse(_baud.Text.Trim(), out baud) || baud < 1200 || baud > 1000000)
             {
-                MessageBox.Show(this, "RS485 baud is invalid.", "Invalid setting");
+                _baud.BackColor = Color.FromArgb(85, 22, 28);
+                ShowInlineNotice("RS485 baud must be between 1200 and 1000000.",
+                    Color.OrangeRed, "[SETTINGS]");
                 return;
             }
-            ushort address;
+            _baud.BackColor = Color.FromArgb(7, 13, 19);
             if (!TryParseUShort(_register.Text.Trim(), out address))
             {
-                MessageBox.Show(this, "Power register must be 0..65535 or 0x0000..0xFFFF.", "Invalid setting");
+                _register.BackColor = Color.FromArgb(85, 22, 28);
+                ShowInlineNotice("Power register must be 0..65535 or 0x0000..0xFFFF.",
+                    Color.OrangeRed, "[SETTINGS]");
                 return;
             }
-            commands[0] = "baud " + baud;
-            commands[1] = "reg 0x" + address.ToString("X4");
-            commands[commandIndex++] = "show";
+            _register.BackColor = Color.FromArgb(7, 13, 19);
+            commands.Insert(0, "reg 0x" + address.ToString("X4"));
+            commands.Insert(0, "baud " + baud);
+            if (ParseReleaseVersion(_connectedFirmwareVersion) >= new Version(1, 0, 6))
+            {
+                string[] profileCommands = { "strict", "westnetz", "ewe", "fnn" };
+                int profileIndex = Math.Max(0, _rseProfile.SelectedIndex);
+                commands.Add("rse profile " + profileCommands[profileIndex] + " CONFIRM");
+            }
+            commands.Add("show");
             if (_serial == null || !_serial.IsOpen) { Send("show"); return; }
+            ShowInlineNotice("Saving inverter and RS485 settings...", Accent, "[SETTINGS]");
             ThreadPool.QueueUserWorkItem(delegate
             {
                 _savingSettings = true;
@@ -1140,15 +1363,16 @@ namespace StampPlcRseConfigurator
                             try { _serial.WriteLine(command); }
                             catch { return; }
                         }
-                        BeginInvoke(new Action<string>(AppendLog), "[PC] > " + command);
+                        SafeBeginInvoke(new Action<string>(AppendLog), "[PC] > " + command);
                         if (isCommit)
                         {
-                            // A rating check performs FC03, a temporary
-                            // FC16+FC03 validation and a restore.  Waiting
-                            // for its actual response avoids queueing the
-                            // next inverter while a slow device is busy.
+                            // A new rating is validated only at physical LIVE
+                            // 100% using FC03 and bounded FC16+FC03 verification.
+                            // Waiting avoids queueing another inverter while a
+                            // slow device is still busy. Offline/unsafe rows
+                            // return PENDING and stay excluded from control.
                             if (!_commitResponse.WaitOne(6500))
-                                BeginInvoke(new Action<string>(AppendLog),
+                                SafeBeginInvoke(new Action<string>(AppendLog),
                                     "[PC] commit response timeout; continuing with next ID");
                         }
                         else Thread.Sleep(80);
@@ -1162,11 +1386,11 @@ namespace StampPlcRseConfigurator
         {
             if (_serial == null || !_serial.IsOpen)
             {
-                MessageBox.Show(this, "Connect to the SmartPLC by USB first.", "Not connected",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                ShowInlineNotice("Connect to the SmartPLC by USB before reading settings.",
+                    Color.FromArgb(255, 184, 55), "[USB]");
                 return;
             }
-            _result.Text = "Reading SmartPLC settings...";
+            ShowInlineNotice("Reading SmartPLC settings...", Accent, "[SETTINGS]");
             _wifiStatus.Text = "Reading...";
             SetAutomaticOtaStatus(null);
             Send("show");
@@ -1189,7 +1413,20 @@ namespace StampPlcRseConfigurator
 
         private void SyncTime(object sender, EventArgs e)
         {
-            Send("time " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
+            ShowInlineNotice("Synchronizing SmartPLC clock from this PC...", Accent, "[CLOCK]");
+            if (Send("time " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)))
+            {
+                ShowInlineNotice("SmartPLC clock synchronized from PC", Accent, "[CLOCK]");
+                DelayedShow();
+            }
+        }
+
+        private void SaveOtaTime(object sender, EventArgs e)
+        {
+            string value = _otaTime.Value.ToString("HH:mm", CultureInfo.InvariantCulture);
+            _otaScheduleStatus.Text = "OTA time: saving " + value + "...";
+            _otaScheduleStatus.ForeColor = Color.FromArgb(255, 184, 55);
+            if (Send("ota time " + value)) DelayedShow();
         }
 
         private static string Utf8Hex(string value)
@@ -1273,7 +1510,7 @@ namespace StampPlcRseConfigurator
                         if (!string.IsNullOrWhiteSpace(name) && name != "<None>" && !names.Contains(name))
                             names.Add(name);
                     }
-                    BeginInvoke(new Action(delegate
+                    SafeBeginInvoke(new Action(delegate
                     {
                         string typed = _wifiSsid.Text;
                         _wifiSsid.Items.Clear();
@@ -1289,7 +1526,7 @@ namespace StampPlcRseConfigurator
                 }
                 catch (Exception ex)
                 {
-                    BeginInvoke(new Action(delegate
+                    SafeBeginInvoke(new Action(delegate
                     {
                         _wifiStatus.Text = "Could not read PC Wi-Fi: " + ex.Message;
                         _wifiStatus.ForeColor = Color.FromArgb(255, 184, 55);
@@ -1303,6 +1540,61 @@ namespace StampPlcRseConfigurator
             Version parsed;
             return Version.TryParse(value.Trim().TrimStart('V', 'v'), out parsed)
                 ? parsed : new Version(0, 0, 0);
+        }
+
+        private bool FirmwareUpdateAvailable(string firmwareVersion)
+        {
+            return !string.IsNullOrWhiteSpace(firmwareVersion) &&
+                ParseReleaseVersion(firmwareVersion) < ParseReleaseVersion(ReleaseVersion);
+        }
+
+        private void ApplyFirmwareProtocol(string firmwareVersion)
+        {
+            if (string.IsNullOrWhiteSpace(firmwareVersion)) return;
+            _connectedFirmwareVersion = firmwareVersion.Trim().TrimStart('V', 'v');
+            // V1.0.5 is the first protocol with IDs 2-7 and separate PV /
+            // inverter-ceiling fields. Earlier firmware remains readable and
+            // configurable using its original ID 1-6 layout.
+            _firstConfiguredId = ParseReleaseVersion(_connectedFirmwareVersion) <
+                new Version(1, 0, 5) ? 1 : 2;
+            bool profileSupported = ParseReleaseVersion(_connectedFirmwareVersion) >=
+                new Version(1, 0, 6);
+            _rseProfile.Enabled = profileSupported;
+            if (!profileSupported) _rseProfile.SelectedIndex = 0;
+            for (int row = 0; row < 6; ++row)
+            {
+                int id = _firstConfiguredId + row;
+                _grid.Rows[row].Cells["Id"].Value = id.ToString(CultureInfo.InvariantCulture);
+                if (_gauges[row] != null) _gauges[row].SetId(id);
+            }
+            UpdateConnectedText();
+        }
+
+        private void UpdateConnectedText()
+        {
+            string port = "";
+            lock (_serialLock)
+                if (_serial != null && _serial.IsOpen) port = _serial.PortName;
+            if (string.IsNullOrEmpty(port)) return;
+            string firmware = string.IsNullOrWhiteSpace(_connectedFirmwareVersion)
+                ? "FW UNKNOWN" : "FW V" + _connectedFirmwareVersion;
+            bool update = FirmwareUpdateAvailable(_connectedFirmwareVersion);
+            _connection.Text = "\u25CF  CONNECTED  " + port + "  |  " + firmware +
+                (update ? "  |  UPDATE AVAILABLE: " + ReleaseVersion : "  |  UP TO DATE");
+            _connection.ForeColor = update ? Color.FromArgb(255, 184, 55) : Accent;
+            if (update)
+                _connection.AccessibleDescription = "A newer bundled SmartPLC firmware is available on the Settings page.";
+        }
+
+        private int FindRowForId(int id)
+        {
+            for (int row = 0; row < _grid.Rows.Count; ++row)
+            {
+                int rowId;
+                if (int.TryParse(Convert.ToString(_grid.Rows[row].Cells["Id"].Value), out rowId) && rowId == id)
+                    return row;
+            }
+            return -1;
         }
 
         private void ScheduleGuiUpdateCheck()
@@ -1323,30 +1615,12 @@ namespace StampPlcRseConfigurator
                     if (!match.Success) return;
                     string latest = match.Groups[1].Value.ToUpperInvariant();
                     if (ParseReleaseVersion(latest) <= ParseReleaseVersion(ReleaseVersion)) return;
-                    string ignored = "";
-                    using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\MES\14a Bridge"))
-                        if (key != null) ignored = Convert.ToString(key.GetValue("IgnoredGuiVersion", ""));
-                    if (string.Equals(ignored, latest, StringComparison.OrdinalIgnoreCase)) return;
                     if (IsDisposed || !IsHandleCreated) return;
-                    BeginInvoke(new Action(delegate
+                    SafeBeginInvoke(new Action(delegate
                     {
-                        using (var dialog = new GuiUpdatePrompt(ReleaseVersion, latest))
-                        {
-                            DialogResult result = dialog.ShowDialog(this);
-                            if (dialog.DoNotRemind)
-                            {
-                                using (RegistryKey key = Registry.CurrentUser.CreateSubKey(@"Software\MES\14a Bridge"))
-                                    if (key != null) key.SetValue("IgnoredGuiVersion", latest, RegistryValueKind.String);
-                            }
-                            if (result == DialogResult.Yes)
-                            {
-                                Process.Start(new ProcessStartInfo
-                                {
-                                    FileName = "https://github.com/tatsuo25103/14a-bridge/releases/latest",
-                                    UseShellExecute = true
-                                });
-                            }
-                        }
+                        ShowInlineNotice("Windows GUI update available: " + latest +
+                            " (installed " + ReleaseVersion + ")",
+                            Color.FromArgb(255, 184, 55), "[UPDATE]");
                     }));
                 }
                 catch
@@ -1365,16 +1639,22 @@ namespace StampPlcRseConfigurator
             int passwordBytes = Encoding.UTF8.GetByteCount(password);
             if (ssidBytes < 1 || ssidBytes > 32)
             {
-                MessageBox.Show(this, "Wi-Fi SSID must contain 1 to 32 bytes.", "Invalid Wi-Fi setting",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                _wifiSsid.BackColor = Color.FromArgb(85, 22, 28);
+                _wifiStatus.Text = "SSID must contain 1 to 32 UTF-8 bytes";
+                _wifiStatus.ForeColor = Color.OrangeRed;
+                ShowInlineNotice(_wifiStatus.Text, Color.OrangeRed, "[WI-FI]");
                 return;
             }
+            _wifiSsid.BackColor = Color.FromArgb(7, 13, 19);
             if (passwordBytes != 0 && (passwordBytes < 8 || passwordBytes > 63))
             {
-                MessageBox.Show(this, "Wi-Fi password must be empty for an open network, or contain 8 to 63 bytes.",
-                    "Invalid Wi-Fi setting", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                _wifiPassword.BackColor = Color.FromArgb(85, 22, 28);
+                _wifiStatus.Text = "Password must be empty, or contain 8 to 63 UTF-8 bytes";
+                _wifiStatus.ForeColor = Color.OrangeRed;
+                ShowInlineNotice(_wifiStatus.Text, Color.OrangeRed, "[WI-FI]");
                 return;
             }
+            _wifiPassword.BackColor = Color.FromArgb(7, 13, 19);
             string passwordHex = passwordBytes == 0 ? "-" : Utf8Hex(password);
             if (Send("wifi sethex " + Utf8Hex(ssid) + " " + passwordHex))
             {
@@ -1392,8 +1672,8 @@ namespace StampPlcRseConfigurator
             if (requested)
             {
                 if (MessageBox.Show(this,
-                    "When enabled, the SmartPLC itself checks GitHub once after startup and every 24 hours. " +
-                    "An update is installed only while Wi-Fi is connected, the RSE input is valid, and Modbus control is idle. Continue?",
+                    "When enabled, the SmartPLC itself checks GitHub only during the configured daily 60-minute OTA window. " +
+                    "An update is installed only while Wi-Fi is connected, the clock is valid, the physical RSE has been stable at 100%, TEST is inactive, Modbus is idle, and all enabled inverters are ready. Continue?",
                     "Enable automatic OTA", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                 {
                     _updatingWifiUi = true;
@@ -1425,14 +1705,37 @@ namespace StampPlcRseConfigurator
                 (enabled.Value ? Accent : Color.FromArgb(255, 184, 55));
         }
 
-        private void InstallOta(object sender, EventArgs e)
+        private void CheckSmartPlcOta(object sender, EventArgs e)
         {
-            if (MessageBox.Show(this,
-                "Download and install the latest firmware from the official GitHub release?\r\n\r\n" +
-                "The SmartPLC itself will use its saved Wi-Fi connection to download and install the update. " +
-                "The Windows GUI is not being updated.\r\n\r\nKeep the StampPLC powered.",
-                "Update SmartPLC firmware by OTA", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            _manualOtaCheckPending = true;
+            _firmwareStatus.Text = "Checking SmartPLC firmware...";
+            _firmwareStatus.ForeColor = Color.FromArgb(255, 184, 55);
+            if (!Send("ota check"))
+            {
+                _manualOtaCheckPending = false;
+                _firmwareStatus.Text = "Connect to a SmartPLC before checking for updates";
+                _firmwareStatus.ForeColor = Color.OrangeRed;
+            }
+        }
+
+        private void OfferSmartPlcOta(string currentVersion, string availableVersion)
+        {
+            DialogResult answer = MessageBox.Show(this,
+                "A newer SmartPLC firmware is available.\r\n\r\n" +
+                "Installed: V" + currentVersion + "\r\n" +
+                "Available: V" + availableVersion + "\r\n\r\n" +
+                "Update the SmartPLC now? Its saved settings will be preserved. " +
+                "Keep power connected until the device restarts.",
+                "SmartPLC update available", MessageBoxButtons.YesNo,
+                MessageBoxIcon.Information);
+            if (answer != DialogResult.Yes)
+            {
+                _firmwareStatus.Text = "Update V" + availableVersion + " available - not installed";
+                _firmwareStatus.ForeColor = Color.FromArgb(255, 184, 55);
+                return;
+            }
             _firmwareStatus.Text = "SmartPLC OTA in progress...";
+            _firmwareStatus.ForeColor = Accent;
             Send("ota update CONFIRM");
         }
 
@@ -1466,6 +1769,12 @@ namespace StampPlcRseConfigurator
             string command = "test " + level;
             if (_dryRun == false)
             {
+                if (_physicalRsePercent < 0 || level > _physicalRsePercent)
+                {
+                    ShowInlineNotice("Test rejected: a live test cannot relax or bypass the physical RSE command.",
+                        Color.OrangeRed, "[TEST]");
+                    return;
+                }
                 if (MessageBox.Show(this,
                     "Write the calculated " + level + "% limit to all enabled inverter IDs?",
                     "Live inverter test", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
@@ -1473,6 +1782,47 @@ namespace StampPlcRseConfigurator
             }
             Send(command);
             DelayedShow();
+        }
+
+        private void DiscoverInverters(object sender, EventArgs e)
+        {
+            if (_serial == null || !_serial.IsOpen)
+            {
+                ShowInlineNotice("Connect to the SmartPLC before discovering inverters.",
+                    Color.OrangeRed, "[DISCOVERY]");
+                return;
+            }
+            // 0x04E5 contains the current feed-in limit rather than an
+            // inverter nameplate value. It is a valid setup preset only at
+            // physical LIVE 100%; using a 0/30/60% value would under-rate the
+            // newly discovered inverter.
+            bool validDiscoveryState = _currentMode == "LIVE" &&
+                (_physicalRsePercent == 100 || _physicalRsePercent < 0);
+            if (!validDiscoveryState)
+            {
+                ShowInlineNotice(
+                    "Discovery requires LIVE mode with physical RSE 100% or RSE not yet installed. Values at 0/30/60% or during TEST cannot identify inverter ratings.",
+                    Color.FromArgb(255, 184, 55), "[DISCOVERY]");
+                return;
+            }
+            string inputWarning = _physicalRsePercent < 0
+                ? "RSE is not valid/installed. Before continuing, confirm every inverter currently holds its FULL-POWER limit.\r\n\r\n"
+                : "Physical RSE is LIVE at 100%.\r\n\r\n";
+            if (MessageBox.Show(this,
+                "FIRST INSTALLATION ONLY\r\n\r\n" +
+                inputWarning +
+                "This reads the current limit from IDs 2-7 and uses each non-zero value as both the initial PV power and inverter rated maximum. " +
+                "All connected inverters must currently be at their full-power setting.\r\n\r\n" +
+                "The result replaces the values shown in the table but is NOT saved until you click Save inverter settings. Continue?",
+                "First-time inverter discovery", MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            _discoveryActive = true;
+            _discoveryFound = 0;
+            for (int row = 0; row < _grid.Rows.Count; ++row)
+                _grid.Rows[row].Cells["Health"].Value = "SCANNING";
+            ShowInlineNotice("Discovering Modbus IDs 2-7 (read-only)...", Accent,
+                "[DISCOVERY]");
+            if (!Send("scan all")) _discoveryActive = false;
         }
 
         private void ApplyCurrent(object sender, EventArgs e)
@@ -1505,15 +1855,44 @@ namespace StampPlcRseConfigurator
             if (match.Success)
             {
                 _rse.Text = "RSE: " + match.Groups[2].Value + " (" + match.Groups[1].Value + ")";
-                int.TryParse(match.Groups[2].Value.TrimEnd('%'), out _rsePercent);
+                if (match.Groups[2].Value == "INVALID" || match.Groups[2].Value == "HOLD")
+                {
+                    _physicalRsePercent = -1;
+                    _rsePercent = 0;
+                }
+                else
+                {
+                    int.TryParse(match.Groups[2].Value.TrimEnd('%'), out _physicalRsePercent);
+                    _rsePercent = _physicalRsePercent;
+                }
                 UpdateGauges();
+                return;
+            }
+            match = RseProfilePattern.Match(line.Trim());
+            if (match.Success)
+            {
+                string value = match.Groups[1].Value.ToUpperInvariant();
+                _rseProfile.SelectedIndex = value == "WESTNETZ_4" ? 1 :
+                    (value == "EWE_HOLD_4" ? 2 : (value == "FNN_EZA_3" ? 3 : 0));
+                return;
+            }
+            match = OutputPattern.Match(line.Trim());
+            if (match.Success)
+            {
+                _result.Text = "Output: " + match.Groups[1].Value +
+                    " | source: " + match.Groups[2].Value;
+                _result.ForeColor = match.Groups[2].Value == "LIVE" ? Color.FromArgb(56, 211, 159) :
+                    (match.Groups[2].Value == "TEST" ? Color.FromArgb(255, 184, 55) : Color.OrangeRed);
                 return;
             }
             match = ModePattern.Match(line.Trim());
             if (match.Success)
             {
-                _mode.Text = "Mode: " + match.Groups[1].Value;
-                _dryRun = match.Groups[1].Value == "DRY-RUN";
+                _currentMode = match.Groups[1].Value;
+                _mode.Text = "Mode: " + _currentMode;
+                _dryRun = _currentMode == "SAFE" || _currentMode == "DRY-RUN";
+                _mode.ForeColor = _currentMode == "LIVE" ? Color.FromArgb(56, 211, 159) :
+                    (_currentMode == "TEST" ? Color.FromArgb(255, 184, 55) : Color.OrangeRed);
                 _baud.Text = match.Groups[2].Value;
                 _register.Text = match.Groups[3].Value.ToUpperInvariant();
                 return;
@@ -1522,6 +1901,8 @@ namespace StampPlcRseConfigurator
             if (match.Success)
             {
                 string version = match.Groups[1].Value;
+                if (!string.Equals(_connectedFirmwareVersion, version.TrimStart('V', 'v'),
+                    StringComparison.OrdinalIgnoreCase)) ApplyFirmwareProtocol(version);
                 bool saved = match.Groups[2].Value == "yes";
                 bool connected = match.Groups[3].Value == "yes";
                 bool automatic = match.Groups[4].Value == "yes";
@@ -1567,9 +1948,16 @@ namespace StampPlcRseConfigurator
             match = OtaPattern.Match(line.Trim());
             if (match.Success)
             {
+                string currentVersion = match.Groups[2].Value;
+                string availableVersion = match.Groups[3].Value;
+                bool manualCheck = _manualOtaCheckPending;
+                _manualOtaCheckPending = false;
                 _firmwareStatus.Text = "Installed V" + match.Groups[2].Value +
                     "  |  Available " + match.Groups[3].Value + "  |  " + match.Groups[4].Value;
                 _firmwareStatus.ForeColor = match.Groups[1].Value == "ERROR" ? Color.OrangeRed : Accent;
+                if (manualCheck && match.Groups[1].Value == "OK" &&
+                    ParseReleaseVersion(availableVersion) > ParseReleaseVersion(currentVersion))
+                    OfferSmartPlcOta(currentVersion, availableVersion);
                 return;
             }
             match = OtaDiagnosticPattern.Match(line.Trim());
@@ -1587,28 +1975,59 @@ namespace StampPlcRseConfigurator
                     (status == "NEVER" ? Muted : Accent);
                 return;
             }
-            match = IdPattern.Match(line.Trim());
+            match = OtaSchedulePattern.Match(line.Trim());
             if (match.Success)
             {
-                int row = int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) - 1;
+                int hour;
+                int minute;
+                if (int.TryParse(match.Groups[1].Value, out hour) &&
+                    int.TryParse(match.Groups[2].Value, out minute))
+                    _otaTime.Value = DateTime.Today.AddHours(hour).AddMinutes(minute);
+                bool clockOk = match.Groups[4].Value == "OK";
+                _otaScheduleStatus.Text = "OTA time: " + match.Groups[1].Value + ":" +
+                    match.Groups[2].Value + "  |  " + match.Groups[3].Value +
+                    " min window  |  clock " + (clockOk ? "OK" : "INVALID");
+                _otaScheduleStatus.ForeColor = clockOk ? Accent : Color.OrangeRed;
+                return;
+            }
+            bool legacyIdLine = false;
+            match = IdPattern.Match(line.Trim());
+            if (!match.Success)
+            {
+                match = LegacyIdPattern.Match(line.Trim());
+                legacyIdLine = match.Success;
+            }
+            if (match.Success)
+            {
+                int id = int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
+                int row = FindRowForId(id);
+                if (row < 0) return;
                 // Background polling must never overwrite settings that the
                 // operator has just ticked or typed but not saved yet.
                 if (!background)
                 {
                     _grid.Rows[row].Cells["Enabled"].Value = match.Groups[2].Value == "yes";
                     _grid.Rows[row].Cells["Maximum"].Value = match.Groups[3].Value;
+                    string inverterLimit = legacyIdLine ? match.Groups[3].Value : match.Groups[4].Value;
+                    _grid.Rows[row].Cells["InverterLimit"].Value = inverterLimit == "0"
+                        ? "--" : inverterLimit;
                 }
-                _grid.Rows[row].Cells["Target"].Value = match.Groups[4].Value + " W";
-                _grid.Rows[row].Cells["Readback"].Value = match.Groups[5].Value + " W";
+                string target = legacyIdLine ? match.Groups[4].Value : match.Groups[5].Value;
+                string readback = legacyIdLine ? match.Groups[5].Value : match.Groups[6].Value;
+                string healthy = legacyIdLine ? match.Groups[6].Value : match.Groups[7].Value;
+                _grid.Rows[row].Cells["Target"].Value = target + " W";
+                _grid.Rows[row].Cells["Readback"].Value = readback + " W";
                 if (!background || !_ratingIssues[row])
-                    _grid.Rows[row].Cells["Health"].Value = match.Groups[6].Value == "yes" ? "OK" : "CHECK";
+                    _grid.Rows[row].Cells["Health"].Value = healthy == "yes" ? "OK" : "CHECK";
+                RefreshPvWarning(row);
                 UpdateGauges();
                 return;
             }
             match = ProbePattern.Match(line.Trim());
             if (match.Success)
             {
-                int row = int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) - 1;
+                int row = FindRowForId(int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture));
+                if (row < 0) return;
                 _grid.Rows[row].Cells["Readback"].Value = match.Groups[3].Value + " W";
                 string probeStatus = match.Groups[4].Value;
                 _grid.Rows[row].Cells["Health"].Value = probeStatus == "OK"
@@ -1617,15 +2036,52 @@ namespace StampPlcRseConfigurator
                 UpdateGauges();
                 return;
             }
+            match = RatingPattern.Match(line.Trim());
+            if (match.Success)
+            {
+                int row = FindRowForId(int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture));
+                if (row < 0) return;
+                bool verified = match.Groups[2].Value == "VERIFIED";
+                if (!verified || Convert.ToString(_grid.Rows[row].Cells["Health"].Value) == "PENDING")
+                    _grid.Rows[row].Cells["Health"].Value = verified ? "CHECK" : "PENDING";
+                UpdateGauges();
+                return;
+            }
             match = ScanPattern.Match(line.Trim());
             if (match.Success)
             {
-                int row = int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) - 1;
+                int row = FindRowForId(int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture));
+                if (row < 0) return;
                 string status = match.Groups[3].Value;
                 if (status == "FOUND")
                     _grid.Rows[row].Cells["Readback"].Value = match.Groups[2].Value + " W";
-                _grid.Rows[row].Cells["Health"].Value = status == "FOUND" ? "FOUND" :
-                    (status == "NO_RESPONSE" ? "--" : "ERROR");
+                if (_discoveryActive)
+                {
+                    uint discoveredWatts = 0;
+                    bool usable = status == "FOUND" &&
+                        uint.TryParse(match.Groups[2].Value, out discoveredWatts) &&
+                        discoveredWatts > 0;
+                    _grid.Rows[row].Cells["Enabled"].Value = usable;
+                    if (usable)
+                    {
+                        ++_discoveryFound;
+                        string watts = discoveredWatts.ToString(CultureInfo.InvariantCulture);
+                        _grid.Rows[row].Cells["Maximum"].Value = watts;
+                        _grid.Rows[row].Cells["InverterLimit"].Value = watts;
+                        _grid.Rows[row].Cells["Health"].Value = "DISCOVERED";
+                        _limitIssues[row] = false;
+                        _ratingIssues[row] = false;
+                    }
+                    else
+                    {
+                        _grid.Rows[row].Cells["Health"].Value = status == "FOUND"
+                            ? "ZERO - REVIEW" : "NOT FOUND";
+                    }
+                    RefreshPvWarning(row);
+                }
+                else
+                    _grid.Rows[row].Cells["Health"].Value = status == "FOUND" ? "FOUND" :
+                        (status == "NO_RESPONSE" ? "--" : "ERROR");
                 _result.Text = "Scan ID " + match.Groups[1].Value + ": " + status +
                     (status == "FOUND" ? "  " + match.Groups[2].Value + " W" : "");
                 UpdateGauges();
@@ -1634,19 +2090,31 @@ namespace StampPlcRseConfigurator
             match = CommitPattern.Match(line.Trim());
             if (match.Success)
             {
-                int row = int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) - 1;
+                int row = FindRowForId(int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture));
+                if (row < 0) return;
                 string status = match.Groups[2].Value;
-                // CLAMPED is not an unsaved error: the controller has adopted
-                // the inverter's proven ceiling and returns that value here.
+                // CLAMPED means PV capacity is above the verified inverter
+                // ceiling. It is a permitted warning, not an invalid setting.
                 _ratingIssues[row] = status == "ERROR";
-                if (status != "ERROR") _grid.Rows[row].Cells["Maximum"].Value = match.Groups[3].Value;
-                _grid.Rows[row].Cells["Health"].Value = status == "CLAMPED" ? "LIMITED" : status;
-                _result.Text = "ID " + match.Groups[1].Value + ": " + status + " - " + match.Groups[4].Value;
+                _grid.Rows[row].Cells["Health"].Value = status == "CLAMPED" ? "PV > INV" : status;
+                ShowInlineNotice("ID " + match.Groups[1].Value + ": " + status +
+                    " - " + match.Groups[4].Value,
+                    status == "CLAMPED" ? Color.FromArgb(255, 184, 55) :
+                    (status == "ERROR" ? Color.OrangeRed : TextColor), "[SETTINGS]");
                 _commitResponse.Set();
-                if (status == "CLAMPED")
-                    MessageBox.Show(this, "ID " + match.Groups[1].Value + " accepted a lower maximum. The setting has been changed automatically to that inverter limit.\r\n\r\n" + match.Groups[4].Value, "Inverter rating adjusted", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                else if (status == "ERROR")
-                    MessageBox.Show(this, "ID " + match.Groups[1].Value + " rating validation failed. The previous configuration was kept.\r\n\r\n" + match.Groups[4].Value, "Inverter validation error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                if (status == "ERROR")
+                    AppendLog("[SETTINGS] ID " + match.Groups[1].Value +
+                        " validation failed; previous configuration kept: " + match.Groups[4].Value);
+                UpdateGauges();
+                return;
+            }
+            if (line.StartsWith("SCAN SUMMARY") && _discoveryActive)
+            {
+                _discoveryActive = false;
+                ShowInlineNotice("Discovery found " + _discoveryFound +
+                    " inverter(s). Review PV and rated power, then click Save inverter settings.",
+                    _discoveryFound > 0 ? Accent : Color.FromArgb(255, 184, 55),
+                    "[DISCOVERY]");
                 UpdateGauges();
                 return;
             }
@@ -1662,6 +2130,11 @@ namespace StampPlcRseConfigurator
                 _firmwareStatus.Text = line;
                 _firmwareStatus.ForeColor = line.Contains("ERROR") ? Color.OrangeRed : Accent;
             }
+            if (line.StartsWith("RSE PROFILE STATUS="))
+            {
+                bool error = line.Contains("STATUS=ERROR");
+                ShowInlineNotice(line, error ? Color.OrangeRed : Accent, "[RSE]");
+            }
         }
 
         private void UpdateGauges()
@@ -1670,10 +2143,25 @@ namespace StampPlcRseConfigurator
             {
                 bool enabled = Convert.ToBoolean(_grid.Rows[row].Cells["Enabled"].Value ?? false);
                 uint maximum = ParseWatts(_grid.Rows[row].Cells["Maximum"].Value);
+                uint inverterLimit = ParseWatts(_grid.Rows[row].Cells["InverterLimit"].Value);
                 uint readback = ParseWatts(_grid.Rows[row].Cells["Readback"].Value);
                 string health = Convert.ToString(_grid.Rows[row].Cells["Health"].Value) ?? "--";
-                _gauges[row].SetState(enabled, _rsePercent, maximum, readback, health);
+                _gauges[row].SetState(enabled, _rsePercent,
+                    inverterLimit == 0 ? maximum : inverterLimit, readback, health);
             }
+        }
+
+        private void RefreshPvWarning(int row)
+        {
+            if (row < 0 || row >= _grid.Rows.Count) return;
+            uint pv = ParseWatts(_grid.Rows[row].Cells["Maximum"].Value);
+            uint limit = ParseWatts(_grid.Rows[row].Cells["InverterLimit"].Value);
+            _pvOversizeWarnings[row] = limit > 0 && pv > limit;
+            DataGridViewCell cell = _grid.Rows[row].Cells["Maximum"];
+            cell.ToolTipText = _pvOversizeWarnings[row]
+                ? "Allowed warning: 100% is capped by the inverter; 60% and 30% use installed PV power."
+                : "Section 14a percentage basis: total installed PV module power.";
+            _grid.InvalidateCell(cell);
         }
 
         private static uint ParseWatts(object value)
@@ -1705,13 +2193,20 @@ namespace StampPlcRseConfigurator
                 choices[1].PortName == "COM7" && choices[1].IsSmartPlc &&
                 choices[2].PortName == "COM1" && !choices[2].IsSmartPlc;
             return RsePattern.IsMatch("RSE DI mask: 0x02  level: 60%") &&
-                   ModePattern.IsMatch("Mode: DRY-RUN  RS485: 19200 baud  register: 0x04E5  quantity: 2") &&
-                   IdPattern.IsMatch("3   yes        10000  10000   6000   3000      0     6000      6000  yes") &&
+                   RsePattern.IsMatch("RSE DI mask: 0x00  level: HOLD") &&
+                   RseProfilePattern.IsMatch("RSE PROFILE=FNN_EZA_3") &&
+                   OutputPattern.IsMatch("Output: 100%  source: TEST") &&
+                   OutputPattern.IsMatch("Output: UNCHANGED  source: INVALID RSE") &&
+                   ModePattern.IsMatch("Mode: SAFE  RS485: 19200 baud  register: 0x04E5  quantity: 2") &&
+                   ModePattern.IsMatch("Mode: TEST  RS485: 19200 baud  register: 0x04E5  quantity: 2") &&
+                   IdPattern.IsMatch("3   yes        18000    15000  15000  10800   5400      0    10800     10800  yes") &&
+                   LegacyIdPattern.IsMatch("2   yes        15000  15000   9000   4500      0     9000      9000  yes") &&
                    ProbePattern.IsMatch("PROBE ID=3 REGISTER=0x04E5 VALUE=10000 STATUS=OK DETAIL=readback verified") &&
                    WifiPattern.IsMatch("WIFI VERSION=1.0.1 SAVED=yes CONNECTED=yes AUTO=no SSIDHEX=4D4553 IP=192.168.1.2 RSSI=-52") &&
                    OtaAutoPattern.IsMatch("OTA AUTO=yes STATUS=OK DETAIL=saved") &&
                    OtaAutoPattern.IsMatch("OTA AUTO=no STATUS=ERROR DETAIL=NVS save failed") &&
                    OtaDiagnosticPattern.IsMatch("OTA LAST=ERROR CHECK=1786455000 SUCCESS=0 FAILS=2 NEXT=1800 DETAILHEX=544C53206572726F72") &&
+                   OtaSchedulePattern.IsMatch("OTA SCHEDULE=01:00 WINDOW=60 CLOCK=OK") &&
                    TryParseSmartPlcIdentity(
                        "IDENTITY PRODUCT=14A_BRIDGE MODEL=STAMPPLC VERSION=1.0.2\r\n", out version) &&
                    version == "1.0.2" &&
@@ -1721,6 +2216,11 @@ namespace StampPlcRseConfigurator
                    !TryParseSmartPlcIdentity("AT+GMR\r\nOTHER SERIAL DEVICE\r\n", out version) &&
                    new PortChoice("COM5", true, "1.0.2").ToString().Contains("[SMARTPLC]") &&
                    new PortChoice("COM9", false, "").ToString().Contains("UNPROGRAMMED") &&
+                   ParseReleaseVersion("1.0.4") < ParseReleaseVersion(ReleaseVersion) &&
+                   ParseReleaseVersion("1.0.6") == ParseReleaseVersion(ReleaseVersion) &&
+                   ShouldAutoConnect(1, false) &&
+                   !ShouldAutoConnect(2, false) &&
+                   !ShouldAutoConnect(1, true) &&
                    multipleDeviceOrder;
         }
     }
@@ -1786,13 +2286,14 @@ namespace StampPlcRseConfigurator
 
     internal sealed class LiquidGauge : Control
     {
-        private readonly int _id;
+        private int _id;
         private int _commandPercent;
         private uint _maximumWatts;
         private uint _readbackWatts;
         private string _health = "--";
         private float _displayPercent;
         private float _targetPercent;
+        private float _displayCommandPercent;
         private float _phase;
 
         internal LiquidGauge(int id)
@@ -1802,6 +2303,13 @@ namespace StampPlcRseConfigurator
             Margin = new Padding(4, 2, 4, 2);
             DoubleBuffered = true;
             BackColor = Color.FromArgb(8, 13, 19);
+        }
+
+        internal void SetId(int id)
+        {
+            if (_id == id) return;
+            _id = id;
+            Invalidate();
         }
 
         internal void SetState(bool enabled, int commandPercent, uint maximumWatts, uint readbackWatts, string health)
@@ -1818,6 +2326,9 @@ namespace StampPlcRseConfigurator
         {
             _displayPercent += (_targetPercent - _displayPercent) * 0.14F;
             if (Math.Abs(_targetPercent - _displayPercent) < 0.1F) _displayPercent = _targetPercent;
+            _displayCommandPercent += (_commandPercent - _displayCommandPercent) * 0.14F;
+            if (Math.Abs(_commandPercent - _displayCommandPercent) < 0.1F)
+                _displayCommandPercent = _commandPercent;
             _phase += 0.13F;
             Invalidate();
         }
@@ -1831,7 +2342,9 @@ namespace StampPlcRseConfigurator
             // communications/control faults and a rejected rating are a
             // whole-card red condition, not a subtle status label.
             bool fault = _health == "ERROR" || _health == "CLAMPED";
-            Color level = LevelColor(_displayPercent);
+            // Match the SmartPLC: fill height is inverter readback, while
+            // liquid colour follows the RSE command.
+            Color level = LevelColor(_displayCommandPercent);
             using (GraphicsPath path = Rounded(box, 10))
             using (SolidBrush panel = new SolidBrush(fault ? Color.FromArgb(115, 32, 42) : Color.FromArgb(19, 31, 42)))
             using (Pen border = new Pen(fault ? Color.FromArgb(255, 75, 80) : level, fault ? 2F : 1.4F))
@@ -1859,7 +2372,7 @@ namespace StampPlcRseConfigurator
                 e.Graphics.ResetClip();
                 e.Graphics.DrawPath(border, path);
             }
-            float commandY = box.Bottom - 3 - (box.Height - 6) * _commandPercent / 100F;
+            float commandY = box.Bottom - 3 - (box.Height - 6) * _displayCommandPercent / 100F;
             using (Pen dash = new Pen(Color.White, 1.4F) { DashPattern = new float[] { 4, 3 } })
                 e.Graphics.DrawLine(dash, box.Left + 4, commandY, box.Right - 4, commandY);
             using (StringFormat center = new StringFormat { Alignment = StringAlignment.Center })
@@ -1887,9 +2400,22 @@ namespace StampPlcRseConfigurator
 
         private static Color LevelColor(float percent)
         {
-            if (percent < 30) return Color.FromArgb(255, 86, 85);
-            if (percent < 60) return Color.FromArgb(255, 184, 55);
-            return Color.FromArgb(36, 220, 145);
+            Color red = Color.FromArgb(255, 86, 85);
+            Color orange = Color.FromArgb(255, 184, 55);
+            Color yellow = Color.FromArgb(245, 220, 55);
+            Color green = Color.FromArgb(36, 220, 145);
+            if (percent <= 30F) return Blend(red, orange, percent / 30F);
+            if (percent <= 60F) return Blend(orange, yellow, (percent - 30F) / 30F);
+            return Blend(yellow, green, (percent - 60F) / 40F);
+        }
+
+        private static Color Blend(Color from, Color to, float amount)
+        {
+            amount = Math.Max(0F, Math.Min(1F, amount));
+            return Color.FromArgb(
+                (int)(from.R + (to.R - from.R) * amount),
+                (int)(from.G + (to.G - from.G) * amount),
+                (int)(from.B + (to.B - from.B) * amount));
         }
 
         private static string FormatKw(uint watts) { return (watts / 1000F).ToString("0.0", CultureInfo.InvariantCulture) + " kW"; }
@@ -1921,7 +2447,7 @@ namespace StampPlcRseConfigurator
             }
             if (args.Length == 2 && args[0] == "--render-update-prompt")
             {
-                using (var prompt = new GuiUpdatePrompt("V1.0.4", "V1.0.5"))
+                using (var prompt = new GuiUpdatePrompt("V1.0.6", "V1.0.7"))
                 {
                     prompt.Show();
                     Application.DoEvents();

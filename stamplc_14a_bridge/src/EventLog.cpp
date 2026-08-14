@@ -4,20 +4,24 @@
 
 namespace {
 constexpr const char* LOG_PATH = "/rse_events.csv";
+constexpr const char* OLD_LOG_PATH = "/rse_events.previous.csv";
+constexpr size_t MAX_LOG_BYTES = 4UL * 1024UL * 1024UL;
+
+bool createLogFile() {
+    File f = SD.open(LOG_PATH, FILE_WRITE);
+    if (!f) return false;
+    f.println("timestamp,event,rse_mask,percent,inverter_id,max_power_w,requested_w,readback_w,result");
+    f.flush();
+    f.close();
+    return true;
+}
 }
 
 void EventLog::begin() {
     available_ = SD.cardType() != CARD_NONE;
     if (!available_) return;
     if (!SD.exists(LOG_PATH)) {
-        File f = SD.open(LOG_PATH, FILE_WRITE);
-        if (f) {
-            f.println("timestamp,event,rse_mask,percent,inverter_id,max_power_w,requested_w,readback_w,result");
-            f.flush();
-            f.close();
-        } else {
-            available_ = false;
-        }
+        available_ = createLogFile();
     }
 }
 
@@ -44,6 +48,24 @@ void EventLog::append(const String& timestamp, const String& event,
         available_ = false;
         return;
     }
+    if (f.size() >= MAX_LOG_BYTES) {
+        f.close();
+        if (SD.exists(OLD_LOG_PATH)) SD.remove(OLD_LOG_PATH);
+        // If rotation fails, keep using the current file. Logging must never
+        // interfere with inverter control merely because the SD card is worn,
+        // full, or write-protected.
+        if (SD.rename(LOG_PATH, OLD_LOG_PATH)) {
+            if (!createLogFile()) {
+                available_ = false;
+                return;
+            }
+        }
+        f = SD.open(LOG_PATH, FILE_APPEND);
+        if (!f) {
+            available_ = false;
+            return;
+        }
+    }
     f.println(line);
     f.flush();
     f.close();
@@ -67,4 +89,3 @@ String EventLog::tail(size_t maximumRows) {
     for (size_t i = 0; i < stored; ++i) output += rows[(start + i) % capacity] + "\n";
     return output;
 }
-

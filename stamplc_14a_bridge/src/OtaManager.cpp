@@ -17,7 +17,7 @@ extern const uint8_t otaSigningPublicStart[]
     asm("_binary_certs_ota_signing_public_pem_start");
 
 namespace {
-constexpr char CURRENT_VERSION[] = "1.0.4";
+constexpr char CURRENT_VERSION[] = "1.0.6";
 constexpr char HARDWARE_ID[] = "M5STACK_STAMPPLC";
 constexpr char SIGNATURE_ALGORITHM[] = "ECDSA_P256_SHA256";
 constexpr char PRIMARY_MANIFEST_URL[] =
@@ -31,8 +31,9 @@ constexpr char RAW_DOWNLOAD_PREFIX[] =
     "stamplc_14a_bridge/release/";
 constexpr char RELEASE_DOWNLOAD_PREFIX[] =
     "https://github.com/tatsuo25103/14a-bridge/releases/download/";
-constexpr uint32_t FIRST_AUTO_CHECK_MS = 60000;
-constexpr uint32_t AUTO_CHECK_INTERVAL_MS = 24UL * 60UL * 60UL * 1000UL;
+constexpr char LOCAL_TIME_ZONE[] = "CET-1CEST,M3.5.0,M10.5.0/3";
+constexpr uint16_t OTA_WINDOW_MINUTES = 60;
+constexpr uint32_t RTC_NTP_SYNC_INTERVAL_MS = 24UL * 60UL * 60UL * 1000UL;
 constexpr uint32_t FAILURE_BACKOFF_MS[] = {
     15UL * 60UL * 1000UL,
     30UL * 60UL * 1000UL,
@@ -92,7 +93,7 @@ void OtaManager::reportProgress(const String& stage, int percent) {
 void OtaManager::begin() {
     load();
     loadDiagnostics();
-    nextAutomaticCheckMs_ = FIRST_AUTO_CHECK_MS;
+    nextAutomaticCheckMs_ = 0;
     if (hasCredentials()) connectNow();
 }
 
@@ -102,17 +103,37 @@ void OtaManager::load() {
     ssid_ = p.getString("ssid", "");
     password_ = p.getString("password", "");
     automatic_ = p.getBool("auto_ota", false);
+    scheduleHour_ = min<uint8_t>(p.getUChar("ota_hour", 1), 23);
+    scheduleMinute_ = min<uint8_t>(p.getUChar("ota_min", 0), 59);
     p.end();
 }
 
 bool OtaManager::save() {
     Preferences p;
     if (!p.begin("bridgewifi", false)) return false;
-    p.putString("ssid", ssid_);
-    p.putString("password", password_);
-    p.putBool("auto_ota", automatic_);
+    // These settings change rarely. Avoid consuming NVS erase cycles when the
+    // GUI resends a value that is already stored.
+    const auto saveString = [&p](const char* key, const String& value) {
+        if (p.isKey(key) && p.getString(key, "") == value) return true;
+        p.putString(key, value);
+        return p.isKey(key) && p.getString(key, "") == value;
+    };
+    const auto saveBool = [&p](const char* key, bool value) {
+        if (p.isKey(key) && p.getBool(key, !value) == value) return true;
+        return p.putBool(key, value) == sizeof(uint8_t);
+    };
+    const auto saveUChar = [&p](const char* key, uint8_t value) {
+        if (p.isKey(key) && p.getUChar(key, value ^ 0xFF) == value) return true;
+        return p.putUChar(key, value) == sizeof(uint8_t);
+    };
+    bool ok = true;
+    ok = saveString("ssid", ssid_) && ok;
+    ok = saveString("password", password_) && ok;
+    ok = saveBool("auto_ota", automatic_) && ok;
+    ok = saveUChar("ota_hour", scheduleHour_) && ok;
+    ok = saveUChar("ota_min", scheduleMinute_) && ok;
     p.end();
-    return true;
+    return ok;
 }
 
 void OtaManager::loadDiagnostics() {
@@ -123,17 +144,26 @@ void OtaManager::loadDiagnostics() {
     lastCheckEpoch_ = p.getULong("last_check", 0);
     lastSuccessEpoch_ = p.getULong("last_ok", 0);
     consecutiveFailures_ = p.getULong("failures", 0);
+    lastScheduledDay_ = p.getInt("sched_day", -1);
     p.end();
 }
 
 void OtaManager::saveDiagnostics() {
     Preferences p;
     if (!p.begin("bridgeota", false)) return;
-    p.putString("status", lastStatus_);
-    p.putString("detail", lastDetail_.substring(0, 180));
-    p.putULong("last_check", lastCheckEpoch_);
-    p.putULong("last_ok", lastSuccessEpoch_);
-    p.putULong("failures", consecutiveFailures_);
+    const String storedDetail = lastDetail_.substring(0, 180);
+    if (!p.isKey("status") || p.getString("status", "") != lastStatus_)
+        p.putString("status", lastStatus_);
+    if (!p.isKey("detail") || p.getString("detail", "") != storedDetail)
+        p.putString("detail", storedDetail);
+    if (!p.isKey("last_check") || p.getULong("last_check", ~lastCheckEpoch_) != lastCheckEpoch_)
+        p.putULong("last_check", lastCheckEpoch_);
+    if (!p.isKey("last_ok") || p.getULong("last_ok", ~lastSuccessEpoch_) != lastSuccessEpoch_)
+        p.putULong("last_ok", lastSuccessEpoch_);
+    if (!p.isKey("failures") || p.getULong("failures", ~consecutiveFailures_) != consecutiveFailures_)
+        p.putULong("failures", consecutiveFailures_);
+    if (!p.isKey("sched_day") || p.getInt("sched_day", ~lastScheduledDay_) != lastScheduledDay_)
+        p.putInt("sched_day", lastScheduledDay_);
     p.end();
 }
 
@@ -160,16 +190,15 @@ void OtaManager::scheduleAfterFailure() {
     const uint32_t base = FAILURE_BACKOFF_MS[index];
     const uint32_t jitter = esp_random() % max<uint32_t>(base / 10, 1);
     nextAutomaticCheckMs_ = millis() + base + jitter;
+    nextScheduledSeconds_ = (base + jitter) / 1000UL;
 }
 
 void OtaManager::scheduleAfterSuccess() {
-    const uint32_t jitter = esp_random() % (60UL * 60UL * 1000UL);
-    nextAutomaticCheckMs_ = millis() + AUTO_CHECK_INTERVAL_MS + jitter;
+    nextAutomaticCheckMs_ = 0;
 }
 
 uint32_t OtaManager::nextCheckSeconds() const {
-    const int32_t remaining = static_cast<int32_t>(nextAutomaticCheckMs_ - millis());
-    return remaining <= 0 ? 0 : static_cast<uint32_t>(remaining) / 1000UL;
+    return nextScheduledSeconds_;
 }
 
 String OtaManager::lastDetailHex() const { return encodeHex(lastDetail_); }
@@ -245,7 +274,7 @@ void OtaManager::connectNow() {
     WiFi.setAutoReconnect(true);
     WiFi.persistent(false);
     WiFi.begin(ssid_.c_str(), password_.c_str());
-    configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
+    configTzTime(LOCAL_TIME_ZONE, "pool.ntp.org", "time.cloudflare.com");
 }
 
 bool OtaManager::setAutomatic(bool enabled) {
@@ -256,8 +285,25 @@ bool OtaManager::setAutomatic(bool enabled) {
         return false;
     }
     if (enabled) {
-        nextAutomaticCheckMs_ = millis() + 5000;
+        nextAutomaticCheckMs_ = 0;
+        lastScheduleEvaluationMs_ = 0;
     }
+    return true;
+}
+
+bool OtaManager::setSchedule(uint8_t hour, uint8_t minute) {
+    if (hour > 23 || minute > 59) return false;
+    const uint8_t previousHour = scheduleHour_;
+    const uint8_t previousMinute = scheduleMinute_;
+    scheduleHour_ = hour;
+    scheduleMinute_ = minute;
+    if (!save()) {
+        scheduleHour_ = previousHour;
+        scheduleMinute_ = previousMinute;
+        return false;
+    }
+    nextAutomaticCheckMs_ = 0;
+    lastScheduleEvaluationMs_ = 0;
     return true;
 }
 
@@ -420,7 +466,7 @@ bool OtaManager::fetchManifest(Manifest& manifest, String& detail) {
         return false;
     }
     if (time(nullptr) < 1704067200) {
-        configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
+        configTzTime(LOCAL_TIME_ZONE, "pool.ntp.org", "time.cloudflare.com");
         const uint32_t deadline = millis() + 10000;
         while (time(nullptr) < 1704067200 &&
                static_cast<int32_t>(millis() - deadline) < 0)
@@ -626,6 +672,10 @@ bool OtaManager::installUpdate(String& detail) {
         reportProgress("ERROR");
         return false;
     }
+    if (currentWindowDay_ >= 0) {
+        lastScheduledDay_ = currentWindowDay_;
+        saveDiagnostics();
+    }
     recordDiagnostic("INSTALLED", detail, true);
     reportProgress("RESTARTING", 100);
     Serial.println("OTA STATUS=REBOOT DETAIL=" + detail);
@@ -636,9 +686,66 @@ bool OtaManager::installUpdate(String& detail) {
 }
 
 void OtaManager::service(bool safeToUpdate) {
-    if (!automatic_ || !connected() || !safeToUpdate) return;
     const uint32_t now = millis();
-    if (static_cast<int32_t>(now - nextAutomaticCheckMs_) < 0) return;
+    if (now - lastScheduleEvaluationMs_ < 1000) return;
+    lastScheduleEvaluationMs_ = now;
+
+    // ESP SNTP keeps system time synchronized. Copy local Europe/Berlin time
+    // into the battery-backed StampPLC RTC at startup and once per day. This
+    // writes RTC registers, not ESP flash or inverter non-volatile memory.
+    const time_t networkNow = time(nullptr);
+    if (connected() && rtcSyncCallback_ && networkNow > 1704067200 &&
+        (lastRtcSyncMs_ == 0 || now - lastRtcSyncMs_ >= RTC_NTP_SYNC_INTERVAL_MS)) {
+        struct tm localTime {};
+        localtime_r(&networkNow, &localTime);
+        rtcSyncCallback_(localTime);
+        lastRtcSyncMs_ = now;
+        Serial.println("CLOCK STATUS=NTP_SYNCED ZONE=Europe/Berlin");
+    }
+
+    if (!automatic_) {
+        nextScheduledSeconds_ = 0;
+        return;
+    }
+
+    uint32_t localDay = 0;
+    uint16_t localMinute = 0;
+    uint8_t localSecond = 0;
+    if (!localClockProvider_ ||
+        !localClockProvider_(localDay, localMinute, localSecond)) {
+        nextScheduledSeconds_ = 0;
+        return;
+    }
+
+    const uint16_t scheduledMinute =
+        static_cast<uint16_t>(scheduleHour_) * 60U + scheduleMinute_;
+    const uint16_t elapsed = static_cast<uint16_t>(
+        (localMinute + 1440U - scheduledMinute) % 1440U);
+    const bool inWindow = elapsed < OTA_WINDOW_MINUTES;
+    const int32_t windowDay = static_cast<int32_t>(localDay) -
+        ((inWindow && localMinute < scheduledMinute) ? 1 : 0);
+
+    if (!inWindow || lastScheduledDay_ == windowDay) {
+        uint16_t minutesUntil = static_cast<uint16_t>(
+            (scheduledMinute + 1440U - localMinute) % 1440U);
+        if (minutesUntil == 0) minutesUntil = 1440;
+        nextScheduledSeconds_ = static_cast<uint32_t>(minutesUntil) * 60UL -
+                                min<uint8_t>(localSecond, 59);
+        nextAutomaticCheckMs_ = 0;
+        return;
+    }
+
+    if (!connected() || !safeToUpdate) {
+        nextScheduledSeconds_ = 60;
+        return;
+    }
+    if (nextAutomaticCheckMs_ != 0 &&
+        static_cast<int32_t>(now - nextAutomaticCheckMs_) < 0) {
+        nextScheduledSeconds_ =
+            static_cast<uint32_t>(nextAutomaticCheckMs_ - now) / 1000UL;
+        return;
+    }
+    currentWindowDay_ = windowDay;
     String version;
     String detail;
     Serial.println("OTA AUTO STATUS=CHECKING");
@@ -648,6 +755,8 @@ void OtaManager::service(bool safeToUpdate) {
         return;
     }
     if (compareVersions(version, CURRENT_VERSION) <= 0) {
+        lastScheduledDay_ = windowDay;
+        saveDiagnostics();
         scheduleAfterSuccess();
         Serial.println("OTA AUTO STATUS=UP_TO_DATE VERSION=" + version);
         return;
