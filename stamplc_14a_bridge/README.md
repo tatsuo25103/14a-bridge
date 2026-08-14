@@ -208,9 +208,15 @@ Example for ID 3 with 18,000 W installed PV and a verified 15,000 W inverter cei
   Firmware is downloaded over certificate-validated HTTPS and accepted only
   when its SHA-256 matches the release manifest.
 - Automatic OTA is off by default. When enabled in the GUI, the controller
-  runs only in its configured 60-minute daily window (default 01:00–01:59).
-  Installation starts only while the clock and RSE state are valid, TEST is
-  inactive, and Modbus control is idle. A missed window waits until the next day.
+  runs only in its configured 60-minute daily window. The default
+  **01:00–01:59 Europe/Berlin** window is intentionally selected as a
+  non-daylight maintenance period. Installation starts only while the clock is
+  valid, the physical RSE is stable at 100%, TEST is inactive, Modbus control
+  is idle, and all enabled inverters are verified and ready. These checks are
+  repeated during download. An unsafe or missed window waits until the next
+  day instead of moving the update into daytime. The configured time is not an
+  astronomical sunrise/sunset calculation; keep it in a verified non-daylight
+  period for the installation location.
 
 ## Build and flash
 
