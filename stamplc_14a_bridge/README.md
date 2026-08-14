@@ -45,6 +45,18 @@ Quick guides are also available separately:
 A 12 V / 1 A supply is sufficient for the StampPLC itself. Use approximately
 2-2.5 A when the same supply also powers interface relays or other equipment.
 
+### Verified compatible inverter models
+
+The current firmware and Windows Configurator have been adapted and verified
+for the following equipment:
+
+- **FSP PowerManager Hybrid 10 kW**
+- **FSP PowerManager Hybrid 15 kW**
+
+Compatibility assumes the inverter uses the tested Modbus register map and
+communication settings. Other Modbus RTU models must be verified for register
+address, data format, byte order, and write/readback behaviour before use.
+
 ## 1.2 Install the Windows application
 
 1. Open the [latest GitHub release](https://github.com/tatsuo25103/14a-bridge/releases).
