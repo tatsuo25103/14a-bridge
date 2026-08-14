@@ -120,7 +120,7 @@ namespace StampPlcRseConfigurator
 
     internal sealed class MainForm : Form
     {
-        private const string ReleaseVersion = "V1.0.6";
+        private const string ReleaseVersion = "V1.0.7";
         private static readonly Color Surface = Color.FromArgb(16, 22, 30);
         private static readonly Color Panel = Color.FromArgb(25, 34, 45);
         private static readonly Color Accent = Color.FromArgb(0, 220, 210);
@@ -2217,7 +2217,8 @@ namespace StampPlcRseConfigurator
                    new PortChoice("COM5", true, "1.0.2").ToString().Contains("[SMARTPLC]") &&
                    new PortChoice("COM9", false, "").ToString().Contains("UNPROGRAMMED") &&
                    ParseReleaseVersion("1.0.4") < ParseReleaseVersion(ReleaseVersion) &&
-                   ParseReleaseVersion("1.0.6") == ParseReleaseVersion(ReleaseVersion) &&
+                   ParseReleaseVersion("1.0.6") < ParseReleaseVersion(ReleaseVersion) &&
+                   ParseReleaseVersion("1.0.7") == ParseReleaseVersion(ReleaseVersion) &&
                    ShouldAutoConnect(1, false) &&
                    !ShouldAutoConnect(2, false) &&
                    !ShouldAutoConnect(1, true) &&

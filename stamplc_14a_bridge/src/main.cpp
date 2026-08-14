@@ -7,13 +7,19 @@
 #include <esp_system.h>
 #include <esp_task_wdt.h>
 #include <esp_timer.h>
+#include <sdkconfig.h>
 #include <time.h>
+#include <cstring>
 
 #include "AppConfig.h"
 #include "ControlPolicy.h"
 #include "EventLog.h"
 #include "ModbusRtuMaster.h"
 #include "OtaManager.h"
+
+#ifndef CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+#error "Production OTA requires ESP32 bootloader application rollback support"
+#endif
 
 namespace {
 constexpr int8_t RS485_TX = 0;
@@ -40,6 +46,7 @@ constexpr uint32_t PERIODIC_READ_SLOT_MS = 2000;
 constexpr uint32_t MODBUS_DEVICE_GAP_MS = 500;
 constexpr uint32_t DISPLAY_FRAME_MS = 33;
 constexpr uint32_t MANUAL_TEST_TIMEOUT_MS = 5UL * 60UL * 1000UL;
+constexpr uint32_t MANUAL_ROLLBACK_HOLD_MS = 5000;
 
 AppConfig config;
 HardwareSerial rs485(1);
@@ -80,6 +87,12 @@ uint32_t manualTestDeadline = 0;
 bool watchdogSubscribed = false;
 bool controlReapplyRequired = false;
 uint32_t lastCriticalInputPollAt = 0;
+bool manualRollbackHoldActive = false;
+bool manualRollbackGestureBlocked = false;
+uint32_t manualRollbackHoldStartedAt = 0;
+String manualRollbackTargetVersion;
+String manualRollbackNotice;
+uint32_t manualRollbackNoticeUntil = 0;
 
 void updateDisplay(bool force = false);
 void responsiveDelay(uint32_t durationMs);
@@ -90,6 +103,7 @@ void handleStableRseState(uint8_t mask, const String& reason);
 void startInverterControl();
 void returnToPhysicalRse(const String& reason);
 bool safeForFirmwareUpdate();
+void serviceManualRollbackGesture();
 
 const char* rseProfileText(RseProfile profile) {
     switch (profile) {
@@ -126,13 +140,182 @@ void clearOtaBootState() {
     p.end();
 }
 
+bool loadManualRollbackTarget(uint8_t& subtype, String& version,
+                              const esp_partition_t*& partition) {
+    subtype = 0xFF;
+    version = "";
+    partition = nullptr;
+    Preferences p;
+    // Open read/write so a brand-new unit creates the empty namespace once
+    // instead of emitting an NVS NOT_FOUND error on every status request.
+    if (!p.begin("bridgeprev", false)) return false;
+    if (!p.isKey("subtype") || !p.isKey("version")) {
+        p.end();
+        return false;
+    }
+    subtype = p.getUChar("subtype", 0xFF);
+    version = p.getString("version", "");
+    uint8_t recordedSha[32] {};
+    const bool shaValid = p.isKey("sha") &&
+        p.getBytesLength("sha") == sizeof(recordedSha) &&
+        p.getBytes("sha", recordedSha, sizeof(recordedSha)) ==
+            sizeof(recordedSha);
+    p.end();
+    if (subtype == 0xFF || version.isEmpty() || !shaValid) return false;
+
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    if (!running || static_cast<uint8_t>(running->subtype) == subtype)
+        return false;
+    partition = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP,
+        static_cast<esp_partition_subtype_t>(subtype), nullptr);
+    if (!partition) return false;
+
+    esp_app_desc_t description {};
+    if (esp_ota_get_partition_description(partition, &description) != ESP_OK)
+        return false;
+    // APP_VERSION is our product version, while esp_app_desc_t::version is
+    // supplied by the Arduino framework build. Bind the rollback record to
+    // the immutable ELF SHA instead, so a stale record cannot select a
+    // partition that a later OTA has overwritten.
+    if (memcmp(recordedSha, description.app_elf_sha256,
+               sizeof(recordedSha)) != 0 || version == APP_VERSION)
+        return false;
+    return true;
+}
+
+void showManualRollbackNotice(const String& message) {
+    manualRollbackNotice = message;
+    manualRollbackNoticeUntil = millis() + 3000;
+    updateDisplay(true);
+}
+
+void performManualRollback() {
+    uint8_t subtype = 0xFF;
+    String version;
+    const esp_partition_t* previous = nullptr;
+    if (!loadManualRollbackTarget(subtype, version, previous)) {
+        Serial.println("MANUAL ROLLBACK STATUS=ERROR DETAIL=no verified previous firmware");
+        M5StamPLC.tone(1200, 300);
+        showManualRollbackNotice("NO VALID BACKUP");
+        return;
+    }
+    if (!safeForFirmwareUpdate()) {
+        Serial.println("MANUAL ROLLBACK STATUS=ERROR DETAIL=requires stable physical 100%, LIVE, idle Modbus, and all enabled inverters ready");
+        M5StamPLC.tone(1200, 300);
+        showManualRollbackNotice("UNSAFE - USE LIVE 100%");
+        return;
+    }
+
+    // Prevent the reverted device from automatically reinstalling the version
+    // that the local operator just rejected. It can be enabled again in GUI.
+    const bool autoDisabled = !otaManager.automatic() ||
+        otaManager.setAutomatic(false);
+    if (esp_ota_set_boot_partition(previous) != ESP_OK) {
+        Serial.println("MANUAL ROLLBACK STATUS=ERROR DETAIL=backup image rejected");
+        M5StamPLC.tone(1200, 300);
+        showManualRollbackNotice("BACKUP REJECTED");
+        return;
+    }
+
+    inverterControlStarted = false;
+    otaDisplayStage = "ROLLBACK";
+    otaDisplayPercent = -1;
+    otaDisplayUpdatedAt = millis();
+    updateDisplay(true);
+    Serial.printf("MANUAL ROLLBACK STATUS=REBOOTING VERSION=%s AUTO_OTA=%s\r\n",
+                  version.c_str(), autoDisabled ? "OFF" : "SAVE_ERROR");
+    Serial.flush();
+    M5StamPLC.tone(1800, 180);
+    delay(350);
+    ESP.restart();
+}
+
+void serviceManualRollbackGesture() {
+    if (!manualRollbackNotice.isEmpty() &&
+        static_cast<int32_t>(millis() - manualRollbackNoticeUntil) >= 0) {
+        manualRollbackNotice = "";
+        updateDisplay(true);
+    }
+
+    const bool aPressed = M5StamPLC.BtnA.isPressed();
+    const bool bPressed = M5StamPLC.BtnB.isPressed();
+    const bool cPressed = M5StamPLC.BtnC.isPressed();
+
+    // B cancels and locks the gesture until all three buttons are released.
+    // This makes A+B+C, or pressing B midway, incapable of causing rollback.
+    if (bPressed) {
+        manualRollbackHoldActive = false;
+        manualRollbackGestureBlocked = true;
+        return;
+    }
+    if (manualRollbackGestureBlocked) {
+        if (!aPressed && !bPressed && !cPressed)
+            manualRollbackGestureBlocked = false;
+        return;
+    }
+    if (otaBootValidationPending || applyInProgress || !otaDisplayStage.isEmpty()) {
+        manualRollbackHoldActive = false;
+        return;
+    }
+
+    if (!(aPressed && cPressed)) {
+        manualRollbackHoldActive = false;
+        manualRollbackHoldStartedAt = 0;
+        manualRollbackTargetVersion = "";
+        return;
+    }
+    if (!manualRollbackHoldActive) {
+        manualRollbackHoldActive = true;
+        manualRollbackHoldStartedAt = millis();
+        uint8_t subtype = 0xFF;
+        const esp_partition_t* partition = nullptr;
+        if (!loadManualRollbackTarget(subtype, manualRollbackTargetVersion,
+                                      partition))
+            manualRollbackTargetVersion = "UNAVAILABLE";
+        updateDisplay(true);
+        return;
+    }
+    if (millis() - manualRollbackHoldStartedAt >= MANUAL_ROLLBACK_HOLD_MS) {
+        manualRollbackHoldActive = false;
+        manualRollbackGestureBlocked = true;
+        performManualRollback();
+    }
+}
+
 void rollbackToPreviousApp(uint8_t previousSubtype, const String& reason) {
+    otaDisplayStage = "ROLLBACK";
+    otaDisplayPercent = -1;
+    otaDisplayUpdatedAt = millis();
+    updateDisplay(true);
+    Serial.println("OTA ROLLBACK DETAIL=" + reason);
+
+    // Prefer the ESP-IDF bootloader rollback state machine. If the new image
+    // is still PENDING_VERIFY this marks it invalid and reboots directly into
+    // the last valid application. On success this call does not return.
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    esp_ota_img_states_t runningState = ESP_OTA_IMG_UNDEFINED;
+    if (running &&
+        esp_ota_get_state_partition(running, &runningState) == ESP_OK &&
+        runningState == ESP_OTA_IMG_PENDING_VERIFY) {
+        clearOtaBootState();
+        Serial.println("OTA ROLLBACK STATUS=BOOTLOADER");
+        Serial.flush();
+        const esp_err_t nativeRollback =
+            esp_ota_mark_app_invalid_rollback_and_reboot();
+        Serial.printf("OTA ROLLBACK WARNING=native rollback returned 0x%X; using recorded partition\r\n",
+                      static_cast<unsigned>(nativeRollback));
+    }
+
+    // Defensive fallback for a damaged or unexpected OTA state: select the
+    // exact application partition recorded before Update.end() activated the
+    // new image.
     const esp_partition_t* previous = esp_partition_find_first(
         ESP_PARTITION_TYPE_APP,
         static_cast<esp_partition_subtype_t>(previousSubtype), nullptr);
-    Serial.println("OTA ROLLBACK DETAIL=" + reason);
     if (previous && esp_ota_set_boot_partition(previous) == ESP_OK) {
         clearOtaBootState();
+        Serial.println("OTA ROLLBACK STATUS=RECORDED_PARTITION");
         Serial.flush();
         delay(300);
         ESP.restart();
@@ -171,11 +354,31 @@ void serviceOtaBootValidation() {
         static_cast<int32_t>(millis() - otaBootValidationDeadline) < 0)
         return;
     const esp_partition_t* running = esp_ota_get_running_partition();
-    const bool configValid = (config.modbusQuantity == 1 || config.modbusQuantity == 2) &&
+    uint8_t recordedPreviousSubtype = 0xFF;
+    String recordedPreviousVersion;
+    uint8_t recordedPreviousSha[32] {};
+    bool recordedPreviousShaValid = false;
+    Preferences bootRecord;
+    if (bootRecord.begin("bridgeboot", true)) {
+        recordedPreviousSubtype = bootRecord.getUChar("previous", 0xFF);
+        recordedPreviousVersion = bootRecord.getString("prevver", "");
+        recordedPreviousShaValid =
+            bootRecord.getBytesLength("prevsha") ==
+                sizeof(recordedPreviousSha) &&
+            bootRecord.getBytes("prevsha", recordedPreviousSha,
+                                sizeof(recordedPreviousSha)) ==
+                sizeof(recordedPreviousSha);
+        bootRecord.end();
+    }
+    bool configValid = (config.modbusQuantity == 1 || config.modbusQuantity == 2) &&
                              config.modbusBaud >= 1200 &&
                              config.responseTimeoutMs >= 100 &&
                              config.verifyRetries >= 1 &&
                              config.verifyRetries <= MAX_WRITE_VERIFY_RETRIES;
+#if defined(OTA_FAULT_INJECT_SELF_TEST_FAILURE)
+    configValid = false;
+    Serial.println("OTA FAULT INJECTION=SELF_TEST_FAILURE");
+#endif
     if (!running || !configValid) {
         Preferences p;
         uint8_t previousSubtype = 0xFF;
@@ -189,12 +392,40 @@ void serviceOtaBootValidation() {
     }
     const esp_err_t validation = esp_ota_mark_app_valid_cancel_rollback();
     if (validation != ESP_OK) {
-        Serial.printf("OTA BOOT WARNING=validation state error 0x%X\r\n",
-                      static_cast<unsigned>(validation));
+        Preferences p;
+        uint8_t previousSubtype = 0xFF;
+        if (p.begin("bridgeboot", true)) {
+            previousSubtype = p.getUChar("previous", 0xFF);
+            p.end();
+        }
+        rollbackToPreviousApp(
+            previousSubtype,
+            "could not mark new firmware valid: 0x" + String(validation, HEX));
+        return;
+    }
+    bool previousSaved = false;
+    if (recordedPreviousSubtype != 0xFF &&
+        !recordedPreviousVersion.isEmpty() && recordedPreviousShaValid) {
+        Preferences previous;
+        if (previous.begin("bridgeprev", false)) {
+            previous.clear();
+            previousSaved = previous.putUChar("subtype", recordedPreviousSubtype) > 0;
+            previousSaved = previous.putString("version", recordedPreviousVersion) > 0 &&
+                previousSaved;
+            previousSaved = previous.putBytes(
+                "sha", recordedPreviousSha,
+                sizeof(recordedPreviousSha)) == sizeof(recordedPreviousSha) &&
+                previousSaved;
+            if (!previousSaved) previous.clear();
+            previous.end();
+        }
     }
     clearOtaBootState();
     otaBootValidationPending = false;
     Serial.println("OTA BOOT STATUS=VALID VERSION=" + String(APP_VERSION));
+    Serial.printf("MANUAL ROLLBACK RECORD=%s VERSION=%s\r\n",
+                  previousSaved ? "SAVED" : "UNAVAILABLE",
+                  recordedPreviousVersion.c_str());
 }
 
 void startInverterControl() {
@@ -717,6 +948,10 @@ void printHelp() {
     Serial.println("  ota time <HH:MM>              Set daily automatic OTA window");
     Serial.println("  ota check                     Check the latest GitHub release");
     Serial.println("  ota update CONFIRM            Verify and install the latest firmware");
+#if defined(OTA_FAULT_TEST)
+    Serial.println("  rollback test CONFIRM         Test-only: invoke verified rollback path");
+#endif
+    Serial.println("  Hold A+C for 5 seconds        Boot verified previous firmware (B cancels)");
     Serial.println("  reset CONFIRM                Erase saved configuration and reboot");
     Serial.println("  help                         Show this help");
     Serial.println("All successful setting commands are saved automatically.");
@@ -733,6 +968,16 @@ void printOtaDiagnostic(const char* prefix) {
                   static_cast<unsigned long>(otaManager.consecutiveFailures()),
                   static_cast<unsigned long>(otaManager.nextCheckSeconds()),
                   detailHex.c_str());
+}
+
+void printManualRollbackDiagnostic(const char* prefix) {
+    uint8_t subtype = 0xFF;
+    String version;
+    const esp_partition_t* partition = nullptr;
+    const bool available = loadManualRollbackTarget(subtype, version, partition);
+    Serial.printf("%sMANUAL ROLLBACK AVAILABLE=%s VERSION=%s GESTURE=A+C_5S B=CANCEL\r\n",
+                  prefix, available ? "yes" : "no",
+                  available ? version.c_str() : "--");
 }
 
 void printStatus() {
@@ -758,6 +1003,7 @@ void printStatus() {
                   otaManager.automatic() ? "yes" : "no",
                   otaManager.ipAddress().c_str(), static_cast<long>(otaManager.rssi()));
     printOtaDiagnostic("");
+    printManualRollbackDiagnostic("");
     Serial.println("ID  Enabled  PV(W)  InvLimit  100%    60%    30%     0%  LastReq  Readback  OK");
     for (uint8_t i = 0; i < INVERTER_COUNT; ++i) {
         const InverterConfig& inverter = config.inverters[i];
@@ -810,6 +1056,7 @@ void printGuiStatus() {
                   otaManager.ssidHex().c_str(), otaManager.ipAddress().c_str(),
                   static_cast<long>(otaManager.rssi()));
     printOtaDiagnostic("@ ");
+    printManualRollbackDiagnostic("@ ");
     for (uint8_t i = 0; i < INVERTER_COUNT; ++i) {
         const InverterConfig& inverter = config.inverters[i];
         const bool statusOk = inverterHealthy[i] &&
@@ -979,6 +1226,13 @@ void processUsbCommand(String line) {
         Serial.printf("OTA STATUS=%s DETAIL=%s\r\n", ok ? "OK" : "ERROR", detail.c_str());
         return;
     }
+#if defined(OTA_FAULT_TEST)
+    if (line.equalsIgnoreCase("rollback test CONFIRM")) {
+        Serial.println("MANUAL ROLLBACK TEST=INVOKED SOURCE=USB_TEST_ONLY");
+        performManualRollback();
+        return;
+    }
+#endif
 
     int limitId = 0;
     unsigned long limitWatts = 0;
@@ -1554,6 +1808,88 @@ void updateDisplay(bool force) {
     const int16_t screenW = ui.width();
     const int16_t screenH = ui.height();
 
+    if (manualRollbackHoldActive || !manualRollbackNotice.isEmpty()) {
+        ui.fillScreen(TFT_BLACK);
+        ui.fillRect(0, 0, screenW, 22, COLOR_AMBER);
+        ui.setTextDatum(middle_center);
+        ui.setTextColor(TFT_BLACK);
+        ui.setTextSize(1);
+        ui.drawString("LOCAL FIRMWARE ROLLBACK", screenW / 2, 11);
+        if (manualRollbackHoldActive) {
+            const uint32_t elapsed = millis() - manualRollbackHoldStartedAt;
+            const uint32_t remainingMs = elapsed >= MANUAL_ROLLBACK_HOLD_MS
+                ? 0 : MANUAL_ROLLBACK_HOLD_MS - elapsed;
+            const uint8_t remainingSeconds =
+                static_cast<uint8_t>((remainingMs + 999) / 1000);
+
+            // Compact circular countdown designed for the 240x135 display.
+            // The filled arc is the authoritative five-second progress while
+            // the outer scanner and segmented ticks provide motion without
+            // reducing the readability of the central number.
+            const int16_t centerX = screenW / 2;
+            const int16_t centerY = 70;
+            constexpr int16_t ringOuter = 31;
+            constexpr int16_t ringInner = 25;
+            const float progress = constrain(
+                static_cast<float>(elapsed) / MANUAL_ROLLBACK_HOLD_MS,
+                0.0f, 1.0f);
+            ui.setTextSize(1);
+            ui.setTextColor(COLOR_AMBER);
+            ui.drawString("HOLD A + C", centerX, 29);
+            ui.drawCircle(centerX, centerY, ringOuter + 5, COLOR_NAVY);
+            ui.drawCircle(centerX, centerY, ringOuter + 3, COLOR_CYAN);
+            ui.fillArc(centerX, centerY, ringOuter, ringInner,
+                       0.0f, 359.5f, COLOR_PANEL);
+            if (progress > 0.002f)
+                ui.fillArc(centerX, centerY, ringOuter, ringInner,
+                           0.0f, progress * 359.5f, COLOR_AMBER);
+
+            for (uint8_t tick = 0; tick < 16; ++tick) {
+                const float angle = (tick * 22.5f - 90.0f) * DEG_TO_RAD;
+                const int16_t x1 = centerX + static_cast<int16_t>(
+                    cosf(angle) * (ringOuter + 7));
+                const int16_t y1 = centerY + static_cast<int16_t>(
+                    sinf(angle) * (ringOuter + 7));
+                const int16_t x2 = centerX + static_cast<int16_t>(
+                    cosf(angle) * (ringOuter + 9));
+                const int16_t y2 = centerY + static_cast<int16_t>(
+                    sinf(angle) * (ringOuter + 9));
+                ui.drawLine(x1, y1, x2, y2,
+                            tick <= static_cast<uint8_t>(progress * 15.0f)
+                                ? COLOR_AMBER : COLOR_MUTED);
+            }
+
+            const float scannerAngle =
+                (static_cast<float>((millis() / 7U) % 360U) - 90.0f) *
+                DEG_TO_RAD;
+            const int16_t scannerX = centerX + static_cast<int16_t>(
+                cosf(scannerAngle) * (ringOuter + 3));
+            const int16_t scannerY = centerY + static_cast<int16_t>(
+                sinf(scannerAngle) * (ringOuter + 3));
+            ui.fillCircle(scannerX, scannerY, 2, COLOR_CYAN);
+
+            ui.setTextColor(TFT_WHITE);
+            ui.setTextSize(3);
+            ui.drawString(String(remainingSeconds), centerX, centerY - 1);
+            ui.setTextSize(1);
+            ui.setTextColor(COLOR_MUTED);
+            ui.drawString("TARGET " + manualRollbackTargetVersion,
+                          centerX, 111);
+            ui.setTextColor(COLOR_RED);
+            ui.drawString("B CANCELS", centerX, screenH - 7);
+        } else {
+            ui.setTextColor(COLOR_RED);
+            ui.setTextSize(2);
+            ui.drawString(manualRollbackNotice, screenW / 2, 66);
+            ui.setTextSize(1);
+            ui.setTextColor(COLOR_MUTED);
+            ui.drawString("CURRENT FIRMWARE KEPT", screenW / 2, 96);
+        }
+        ui.setTextDatum(top_left);
+        ui.pushSprite(0, 0);
+        return;
+    }
+
     if (!otaDisplayStage.isEmpty()) {
         ui.fillScreen(TFT_BLACK);
         ui.fillRect(0, 0, screenW, 22, COLOR_NAVY);
@@ -1964,6 +2300,7 @@ void setup() {
 void loop() {
     if (watchdogSubscribed) esp_task_wdt_reset();
     M5StamPLC.update();
+    serviceManualRollbackGesture();
     serviceOtaBootValidation();
     if (!inverterControlStarted) {
         if (!otaBootValidationPending) startInverterControl();
