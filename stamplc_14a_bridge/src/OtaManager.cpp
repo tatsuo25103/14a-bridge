@@ -13,13 +13,29 @@
 #include <time.h>
 
 extern const uint8_t githubRootsStart[] asm("_binary_certs_github_roots_pem_start");
+#if defined(OTA_FAULT_TEST)
+extern const uint8_t otaSigningPublicStart[]
+    asm("_binary_certs_ota_fault_test_public_pem_start");
+#else
 extern const uint8_t otaSigningPublicStart[]
     asm("_binary_certs_ota_signing_public_pem_start");
+#endif
 
 namespace {
-constexpr char CURRENT_VERSION[] = "1.0.6";
+constexpr char CURRENT_VERSION[] = APP_VERSION;
 constexpr char HARDWARE_ID[] = "M5STACK_STAMPPLC";
 constexpr char SIGNATURE_ALGORITHM[] = "ECDSA_P256_SHA256";
+#if defined(OTA_FAULT_TEST)
+constexpr char PRIMARY_MANIFEST_URL[] =
+    "https://raw.githubusercontent.com/tatsuo25103/14a-bridge/"
+    "codex/ota-fault-test/fault_test/ota_manifest.json";
+constexpr char BACKUP_MANIFEST_URL[] =
+    "https://raw.githubusercontent.com/tatsuo25103/14a-bridge/"
+    "codex/ota-fault-test/fault_test/ota_manifest.json";
+constexpr char RAW_DOWNLOAD_PREFIX[] =
+    "https://raw.githubusercontent.com/tatsuo25103/14a-bridge/"
+    "codex/ota-fault-test/fault_test/";
+#else
 constexpr char PRIMARY_MANIFEST_URL[] =
     "https://raw.githubusercontent.com/tatsuo25103/14a-bridge/main/"
     "stamplc_14a_bridge/release/ota_manifest.json";
@@ -29,6 +45,7 @@ constexpr char BACKUP_MANIFEST_URL[] =
 constexpr char RAW_DOWNLOAD_PREFIX[] =
     "https://raw.githubusercontent.com/tatsuo25103/14a-bridge/main/"
     "stamplc_14a_bridge/release/";
+#endif
 constexpr char RELEASE_DOWNLOAD_PREFIX[] =
     "https://github.com/tatsuo25103/14a-bridge/releases/download/";
 constexpr char LOCAL_TIME_ZONE[] = "CET-1CEST,M3.5.0,M10.5.0/3";
@@ -346,7 +363,7 @@ uint32_t OtaManager::jsonUInt(const String& json, const char* key) {
 int OtaManager::compareVersions(const String& left, const String& right) {
     int li = 0;
     int ri = 0;
-    for (uint8_t part = 0; part < 3; ++part) {
+    for (uint8_t part = 0; part < 4; ++part) {
         const int ldot = left.indexOf('.', li);
         const int rdot = right.indexOf('.', ri);
         const int lv = left.substring(li, ldot < 0 ? left.length() : ldot).toInt();
@@ -480,14 +497,18 @@ bool OtaManager::fetchManifest(Manifest& manifest, String& detail) {
     String primaryJson;
     String primaryDetail;
     if (fetchManifestUrl(PRIMARY_MANIFEST_URL, primaryJson, primaryDetail) &&
-        parseAndVerifyManifest(primaryJson, manifest, primaryDetail))
+        parseAndVerifyManifest(primaryJson, manifest, primaryDetail)) {
+        detail = primaryDetail;
         return true;
+    }
 
     String backupJson;
     String backupDetail;
     if (fetchManifestUrl(BACKUP_MANIFEST_URL, backupJson, backupDetail) &&
-        parseAndVerifyManifest(backupJson, manifest, backupDetail))
+        parseAndVerifyManifest(backupJson, manifest, backupDetail)) {
+        detail = backupDetail;
         return true;
+    }
 
     detail = "primary: " + primaryDetail + "; backup: " + backupDetail;
     return false;
@@ -501,8 +522,8 @@ bool OtaManager::checkForUpdate(String& availableVersion, String& detail) {
         reportProgress("ERROR");
         return false;
     }
-    availableVersion = manifest.version;
     const bool updateFound = compareVersions(manifest.version, CURRENT_VERSION) > 0;
+    availableVersion = updateFound ? manifest.version : "";
     recordDiagnostic(updateFound ? "UPDATE_FOUND" : "UP_TO_DATE", detail, true);
     reportProgress(updateFound ? "UPDATE FOUND" : "UP TO DATE", 100);
     return true;
@@ -604,14 +625,26 @@ bool OtaManager::downloadUrlAndInstall(const Manifest& manifest,
         return false;
     }
     const esp_partition_t* runningPartition = esp_ota_get_running_partition();
+    esp_app_desc_t runningDescription {};
+    const bool runningDescriptionValid = runningPartition &&
+        esp_ota_get_partition_description(runningPartition,
+                                          &runningDescription) == ESP_OK;
     Preferences bootState;
-    bool rollbackRecorded = bootState.begin("bridgeboot", false);
+    bool rollbackRecorded = runningDescriptionValid &&
+        bootState.begin("bridgeboot", false);
     if (rollbackRecorded) {
+        bootState.clear();
         rollbackRecorded = bootState.putString("target", manifest.version) > 0;
         rollbackRecorded = bootState.putUChar(
             "previous", runningPartition
                             ? static_cast<uint8_t>(runningPartition->subtype) : 0xFF) > 0 &&
             rollbackRecorded;
+        rollbackRecorded = bootState.putString("prevver", CURRENT_VERSION) > 0 &&
+            rollbackRecorded;
+        rollbackRecorded = bootState.putBytes(
+            "prevsha", runningDescription.app_elf_sha256,
+            sizeof(runningDescription.app_elf_sha256)) ==
+            sizeof(runningDescription.app_elf_sha256) && rollbackRecorded;
         rollbackRecorded = bootState.putUChar("attempts", 0) > 0 && rollbackRecorded;
         bootState.end();
     }

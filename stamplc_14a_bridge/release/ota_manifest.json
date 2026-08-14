@@ -1,11 +1,11 @@
 {
-  "version": "1.0.6",
+  "version": "1.0.7",
   "hardware": "M5STACK_STAMPPLC",
-  "size": 1238624,
+  "size": 1246016,
   "url": "https://raw.githubusercontent.com/tatsuo25103/14a-bridge/main/stamplc_14a_bridge/release/14a_bridge_firmware.bin",
   "primary_url": "https://raw.githubusercontent.com/tatsuo25103/14a-bridge/main/stamplc_14a_bridge/release/14a_bridge_firmware.bin",
-  "backup_url": "https://github.com/tatsuo25103/14a-bridge/releases/download/v1.0.6/14a_bridge_firmware.bin",
-  "sha256": "e6578f43fb9157a30673b07066ea5c30d42e5ee99a62a61ceb75957c923eacfa",
+  "backup_url": "https://github.com/tatsuo25103/14a-bridge/releases/download/v1.0.7/14a_bridge_firmware.bin",
+  "sha256": "f19e90cc0af643d860dee81b0f645f9dc0e585a2c7e62f3337e39f4e5861aab8",
   "signature_alg": "ECDSA_P256_SHA256",
-  "signature": "MEUCIQD67iBqSGy7xwyFZ55qgQXRYBfB0Uj7Wny7zchdJV7mugIgBGD3ZjMUtnXUF6E/+llWfGDbwy4aH+bCTGRX913Y+7g="
+  "signature": "MEQCIANJcb2LQcQKm/kVLl9v8QSamJeVAD8NSs7wiEKWDy6pAiAcnRSRRFUSp7mEuO/8XUBj1/tJq0RN7rieqdbg9sMgsA=="
 }

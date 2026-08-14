@@ -1,5 +1,8 @@
 # 14a Bridge
 
+[Deutsch (Standard)](../README.md) · [English overview](../README.en.md) ·
+[繁體中文](../README.zh-TW.md)
+
 M5Stack StampPLC firmware and a Windows USB Configurator for bridging a
 ripple-control receiver (`Rundsteuerempfänger`, RSE) to up to six
 P17/InfiniSolar inverters over Modbus RTU.
@@ -60,7 +63,7 @@ address, data format, byte order, and write/readback behaviour before use.
 ## 1.2 Install the Windows application
 
 1. Open the [latest GitHub release](https://github.com/tatsuo25103/14a-bridge/releases).
-2. Download `14a_Bridge_Setup_V1.0.6.exe`.
+2. Download `14a_Bridge_Setup_V1.0.7.exe`.
 3. Run the installer and start **14a Bridge - USB Configurator**.
 4. Connect the StampPLC to the PC with a USB Type-C **data** cable.
 
@@ -129,7 +132,7 @@ firmware, or a device that must receive the current USB firmware package.
 
 1. Select its COM port.
 2. Open **SETTINGS**.
-3. Click **USB flash V1.0.6**.
+3. Click **USB flash V1.0.7**.
 4. Confirm the selected port.
 5. Keep USB power connected until the circular indicator reaches `100%` and
    the GUI reports `Complete & verified`.
@@ -270,7 +273,7 @@ capped.
 
 | Control | Function |
 |---|---|
-| **USB flash V1.0.6** | Installs the bundled firmware through USB and verifies the written flash. Intended for first installation, recovery, or migration to the OTA partition layout. Keep power connected. |
+| **USB flash V1.0.7** | Installs the bundled firmware through USB and verifies the written flash. Intended for first installation, recovery, or migration to the OTA partition layout. Keep power connected. |
 | **Check SmartPLC update** | Asks the SmartPLC to check GitHub. If a newer firmware is available, the GUI asks whether to install it. If none is available, no installation occurs. |
 | **Installed firmware** | Shows the version reported by the connected controller. |
 | **Circular progress indicator** | Shows preparation, write/download percentage, verification, completion, or failure. |
@@ -279,6 +282,19 @@ capped.
 SmartPLC firmware OTA and Windows GUI updates are separate. A SmartPLC OTA
 updates the controller. A newer Windows GUI is reported quietly in the
 connection area and does not change the controller by itself.
+
+### Local emergency firmware rollback
+
+After at least one successful OTA update, the StampPLC retains the immediately
+previous verified firmware image. To return to it locally, hold **A + C** for
+five seconds while leaving **B released**. The LCD shows a circular countdown
+and target version. Releasing A/C cancels; pressing B at any point cancels and
+locks the gesture until all buttons are released. The previous partition is
+bound to its immutable ELF SHA-256; missing, stale or overwritten records are
+rejected. Rollback requires stable physical 100%, LIVE mode, idle Modbus and
+all enabled inverters verified at target. An unsafe request keeps the current
+firmware without reboot. A successful local rollback disables automatic OTA
+until it is explicitly enabled again in the GUI.
 
 ## 2.3 COMMISSIONING tab
 
@@ -472,6 +488,20 @@ Maintainers must follow the [production release checklist](docs/RELEASE_PROCESS.
 ---
 
 # 4. Release history
+
+## V1.0.7 — OTA rollback hardening and local recovery
+
+- Added first-boot OTA self-validation with automatic return to the recorded
+  previous application on failure.
+- Held inverter RS485 access until a new OTA image passes validation.
+- Added verified local rollback using the protected A+C five-second gesture;
+  B always cancels.
+- Added a circular LCD rollback countdown and automatic OTA suspension after
+  a local rollback.
+- Corrected OTA checks so an older published manifest is reported as up to
+  date instead of being shown as an available update.
+
+See [V1.0.7 release notes](docs/RELEASE_NOTES_V1.0.7.md).
 
 ## V1.0.6 — RSE profiles and commissioning safety
 
