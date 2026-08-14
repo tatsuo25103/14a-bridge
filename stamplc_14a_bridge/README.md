@@ -1,224 +1,447 @@
 # 14a Bridge
 
-## Quick start guide
+M5Stack StampPLC firmware and a Windows USB Configurator for bridging a
+ripple-control receiver (`Rundsteuerempfänger`, RSE) to up to six
+P17/InfiniSolar inverters over Modbus RTU.
 
-- English: [read online](docs/QUICK_START_en.md) | [download Word](docs/14A_Bridge_V1.0.2_Quick_Start_EN.docx)
-- Traditional Chinese: [read online](docs/QUICK_START_zh-TW.md) | [download Word](docs/14A_Bridge_V1.0.2_Quick_Start_zh-TW.docx)
+The RSE decodes the grid operator's ripple-control signal. The StampPLC reads
+the RSE relay contacts, calculates an individual watt limit for every enabled
+inverter, writes that value only when a control command changes, and verifies
+the result by readback.
 
-## V1.0.6 RSE profile and safety release
+> [!CAUTION]
+> Installation must be performed by a qualified person. Never connect a
+> switched 230 V RSE output directly to the StampPLC 5-36 V DC inputs. Use
+> potential-free contacts or correctly rated interface relays. The selected
+> RSE profile and terminal assignment must match the written requirements of
+> the responsible grid operator.
 
-V1.0.6 adds an installation-specific **RSE profile** setting. The Windows GUI
-can select the legacy strict four-contact table, Westnetz four-contact
-priority, EWE four-contact hold-last behaviour, or the VDE FNN / Netze BW
-three-contact EZA table. Firmware evaluates every possible DI1-DI4 mask using
-the selected fixed truth table; it never guesses a grid-operator profile.
+## Contents
 
-The physical RSE is now authoritative during commissioning: a live GUI TEST
-may make the output more restrictive, but can never release or bypass an
-active physical reduction. OTA installation is permitted only with a stable
-physical 100% release, no active TEST or Modbus transaction, and all enabled
-inverters verified and ready. These checks are repeated during download so an
-RSE transition aborts the update safely. Existing schema-1 and schema-2
-settings migrate to the legacy strict profile without losing inverter, PV,
-RS485, Wi-Fi, or OTA data.
+1. [Installation](#1-installation)
+2. [Operation and GUI controls](#2-operation-and-gui-controls)
+3. [Technical reference and supplementary information](#3-technical-reference-and-supplementary-information)
+4. [Release history](#4-release-history)
 
-## V1.0.5 control-state release
+Quick guides are also available separately:
 
-V1.0.5 makes the controller state explicit on the StampPLC and in the Windows
-GUI. Normal RSE control is shown as green **LIVE**. A GUI 100%, 60%, 30%, or
-0% command is shown as amber **TEST** and automatically returns to the physical
-RSE input after five minutes. A physical RSE transition or **Enable LIVE** ends
-the test immediately. The dedicated OTA screen uses blue. Automatic OTA uses
-a configurable daily maintenance window (default 01:00–01:59). Wi-Fi/NTP
-synchronizes Europe/Berlin local time to the onboard RTC after startup and
-once per day; the GUI can also synchronize the RTC from the PC with one click.
-New or changed installed PV capacities are stored as **PENDING** when the inverter is
-offline or the physical RSE is below 100%. A pending ID is deliberately excluded
-from control until its effective 100% ceiling is verified in LIVE at physical RSE 100%, so a
-commissioning check cannot momentarily relax an active grid limit.
-The former dry-run
-state is no longer a normal customer mode; its underlying lock remains only for
-safe commissioning and compatibility with previously saved devices.
+- [English quick start](docs/QUICK_START_en.md)
+- [Traditional Chinese quick start](docs/QUICK_START_zh-TW.md)
+- [GitHub releases and Windows installer](https://github.com/tatsuo25103/14a-bridge/releases)
 
-## V1.0.4 production OTA release
+---
 
-V1.0.4 hardens OTA for customer deployment. It adds the current Let's Encrypt
-Generation Y trust roots, an MES ECDSA P-256 signed manifest, primary and
-backup GitHub download paths, persistent OTA diagnostics, bounded retry with
-backoff, and first-boot validation with automatic return to the previous app
-after an unconfirmed restart. The Windows GUI displays the last check, last
-success, failure count, next retry, and exact error. V1.0.4 also includes safe
-automatic SmartPLC serial-port identification. During SmartPLC OTA the
-display switches to a dedicated checking, downloading, verifying, installing,
-and restarting screen with download percentage and a keep-power-on warning. Existing inverter,
-RS485, Wi-Fi, and OTA preferences remain stored in NVS across the update.
-Maintainers must follow the [production release checklist](docs/RELEASE_PROCESS.md)
-for every signed firmware release.
+# 1. Installation
 
-For a first-time Windows installation, download and run
-`14a_Bridge_Setup_V1.0.6.exe` from the GitHub release. The installer
-uses the MES icon, installs the USB Configurator, the current StampPLC
-firmware, and a self-contained ESP32-S3 flasher. No Python, PlatformIO, or
-development tools are required on the customer's computer.
+## 1.1 Required equipment
 
-To program a new StampPLC, or upgrade V1.0.0 to the OTA partition layout:
-connect it by USB, start the configurator, select its COM port, open
-**Settings**, and click **USB flash V1.0.6**. This writes the controller
-firmware and OTA partition table; it does not write any inverter over RS485.
-The NVS addresses are unchanged so existing inverter settings are retained.
+- M5Stack StampPLC
+- isolated SELV/PELV 12 V DC power supply
+- RSE with potential-free relay contacts, or suitable interface relays
+- one to six compatible inverters using Modbus IDs `2-7`
+- RS485 cable and a USB Type-C data cable
+- Windows 10 or Windows 11 computer for initial configuration
 
-Firmware for using an M5Stack StampPLC between a ripple-control receiver
-(`Rundsteuerempfänger`, RSE) and up to six P17/InfiniSolar inverters.
+A 12 V / 1 A supply is sufficient for the StampPLC itself. Use approximately
+2-2.5 A when the same supply also powers interface relays or other equipment.
 
-The RSE performs the mains ripple decoding. The StampPLC reads the RSE relay
-contacts and translates the selected level to an individual watt limit for each
-enabled inverter. Select the truth table required by the responsible grid
-operator during commissioning:
+## 1.2 Install the Windows application
 
-| GUI RSE profile | Inputs | No contact | Multiple contacts |
-|---|---|---|---|
-| Strict 4-contact (legacy) | DI1/2/3/4 = 100/60/30/0% | Invalid; output unchanged | Invalid; output unchanged |
-| Westnetz 4-contact | DI1/2/3/4 = K1/K2/K3/K4 | 100% | K1 releases to 100%; otherwise most restrictive wins |
-| EWE 4-contact (hold last) | DI1/2/3/4 = 100/60/30/0% | Hold last valid level | Hold last valid level |
-| VDE FNN / Netze BW 3-contact | DI2/3/4 = 60/30/0%; DI1 unused | 100% | Most restrictive reduction wins; warning logged |
+1. Open the [latest GitHub release](https://github.com/tatsuo25103/14a-bridge/releases).
+2. Download `14a_Bridge_Setup_V1.0.6.exe`.
+3. Run the installer and start **14a Bridge - USB Configurator**.
+4. Connect the StampPLC to the PC with a USB Type-C **data** cable.
 
-The percentage calculation is the same for every profile:
+The installer contains the GUI, the matching firmware, and a self-contained
+ESP32-S3 flasher. Customers do not need Python, PlatformIO, or other
+development tools.
 
-| StampPLC input | RSE level | Calculation for each inverter |
-|---|---:|---|
-| DI1 | 100% | `min(installed PV W × 1.00, verified inverter limit)` |
-| DI2 | 60% | `min(installed PV W × 0.60, verified inverter limit)` |
-| DI3 | 30% | `min(installed PV W × 0.30, verified inverter limit)` |
-| DI4 | 0% | `0 W` |
+## 1.3 Wire the system
 
-Do not select a profile by trial and error. Match it to the wiring and written
-requirements supplied by the responsible grid operator.
+![14a Bridge system wiring](docs/user_manual_assets/system_wiring.png)
 
-## 12 V supply and RSE wiring
+### Configurator screens used during installation
 
-Use an isolated SELV/PELV 230 VAC to 12 V DC DIN-rail supply. A 1 A supply is
-enough for the StampPLC itself; use 2-2.5 A if it also supplies interface relays
-or other equipment.
+![Settings tab](docs/user_manual_assets/gui_settings_v106.png)
+
+![Commissioning tab](docs/user_manual_assets/gui_commissioning_v106.png)
+
+### Power and RSE terminals
+
+| Source | StampPLC terminal | Function |
+|---|---|---|
+| 12 V `+` | `VIN` | StampPLC supply positive |
+| 12 V `0 V` | `GND` | StampPLC supply return |
+| 12 V `0 V` | `COM` | Digital-input common reference |
+| 12 V `+` | RSE relay `COM` | Supplies 12 V through the selected RSE contact |
+| RSE `K1` | `IN1` | 100% command in the default profile |
+| RSE `K2` | `IN2` | 60% command in the default profile |
+| RSE `K3` | `IN3` | 30% command in the default profile |
+| RSE `K4` | `IN4` | 0% command in the default profile |
+
+`GND` powers the StampPLC. `COM` is the reference for the digital inputs. When
+the StampPLC is powered through USB during bench testing, the external 12 V
+supply `0 V` may be connected to `COM` for the input circuit; for the final
+12 V installation, connect the supply return as shown in the diagram.
+
+### RS485 terminals
+
+| StampPLC PWR485 | Inverter | Function |
+|---|---|---|
+| `A` | `A` | RS485 A / D+ |
+| `B` | `B` | RS485 B / D- |
+| `GND` | `GND` | Signal reference when required by the inverter installation |
+
+The PWR485 power pin is connected to StampPLC `VIN` and therefore carries
+12 V. Normally connect only RS485 `A`, `B`, and the required signal reference.
+Do not connect the PWR485 power pin to the inverter unless its documentation
+explicitly requires that voltage.
+
+## 1.4 Identify and connect the StampPLC
+
+1. Click **Scan**.
+2. The GUI performs a read-only identity check on every Windows serial port.
+3. If exactly one StampPLC is found, the GUI connects automatically.
+4. If several StampPLC devices are found, select the required
+   `[SMARTPLC] COMx Vx.x.x` entry and click **Connect**.
+5. Confirm that the connection line shows the COM port, installed firmware,
+   and `UP TO DATE` or `UPDATE AVAILABLE`.
+
+Unrelated serial devices are listed but are not opened as a SmartPLC. This
+prevents the GUI from sending controller commands to other COM-port devices.
+
+## 1.5 Flash a new or unprogrammed StampPLC
+
+Use this step for a new controller, a controller without identifiable
+firmware, or a device that must receive the current USB firmware package.
+
+1. Select its COM port.
+2. Open **SETTINGS**.
+3. Click **USB flash V1.0.6**.
+4. Confirm the selected port.
+5. Keep USB power connected until the circular indicator reaches `100%` and
+   the GUI reports `Complete & verified`.
+6. Wait for the device to restart; the GUI scans and reconnects automatically.
+
+USB flashing writes the bootloader, OTA partition layout, and application,
+then verifies every written region. It does not write a power value to an
+inverter. Existing settings remain in the unchanged NVS storage area.
+
+## 1.6 Configure inverter and RS485 settings
+
+Open **SETTINGS** and configure the table for Modbus IDs `2-7`.
+
+| Field | What to enter |
+|---|---|
+| **Modbus ID** | Fixed inverter address, from 2 to 7 |
+| **Control enabled** | Check only IDs that this StampPLC must control |
+| **Installed PV power (W)** | Total installed PV module capacity for that inverter, in watts |
+| **Inverter rated max (W)** | Verified maximum feed-in limit read from or confirmed for the inverter |
+| **Last target** | Last watt command calculated by the StampPLC; display only |
+| **Readback** | Current value read from the inverter register; display only |
+| **Status** | `OK`, `CHECK`, `PENDING`, warning, or error state |
+
+Then confirm:
+
+- **RS485 baud**: default `19200`; it must match every inverter on the bus.
+- **Power register**: default `0x04E5`; change only when the inverter's verified
+  register map requires a different address.
+- **RSE profile**: select the contact table specified by the grid operator.
+
+### Option A: known inverter IDs and ratings
+
+1. Check the required IDs.
+2. Enter the installed PV power and inverter rated maximum for each ID.
+3. Click **Save inverter settings**.
+4. Click **Read SmartPLC settings** and confirm the saved values and status.
+
+### Option B: first-time discovery
+
+Use **First-time discovery** only during initial installation when the IDs and
+ratings are unknown.
+
+1. Ensure all inverters are powered, assigned unique IDs `2-7`, and currently
+   hold their full-power limit.
+2. Keep the controller in **LIVE**.
+3. Set the physical RSE to 100%, or use this only while the RSE is not yet
+   installed/valid and every inverter is known to be at full power.
+4. Click **First-time discovery** and confirm the warning.
+5. Review the detected IDs, installed PV power, and rated maximum.
+6. Correct any value that is not the actual installation value.
+7. Click **Save inverter settings**. Discovery results are not saved before
+   this button is pressed.
+
+Discovery is read-only. It is blocked at physical 0%, 30%, or 60%, and during
+TEST, because a reduced register value cannot identify an inverter's full
+rating. For a newly discovered unit, the read value is used only as an initial
+preset for both power fields.
+
+## 1.7 Configure Wi-Fi, clock, and automatic OTA
+
+Wi-Fi is optional and is used only for NTP time synchronization and outbound
+GitHub firmware updates. The controller does not open a Wi-Fi access point or
+an inbound network service.
+
+1. Click **Refresh PC Wi-Fi** and select an SSID, or type the SSID manually.
+2. Enter the Wi-Fi password.
+3. Click **Save & connect**.
+4. Confirm the connected SSID, IP address, and RSSI shown at the right.
+5. Click **Sync clock from PC** once during commissioning.
+6. Select a verified non-daylight OTA start time; the default is `01:00`.
+7. Click **Save OTA time**.
+8. Enable **Enable automatic OTA** only if unattended SmartPLC updates are
+   required, then confirm that the GUI shows `AUTO OTA: ON`.
+
+When Wi-Fi is available, the StampPLC also synchronizes Europe/Berlin time by
+NTP after startup and once per day. Time synchronization updates the RTC; it
+does not repeatedly write inverter settings.
+
+## 1.8 Commission and hand over
+
+1. Open **COMMISSIONING** and inspect the physical RSE state.
+2. Confirm the selected RSE profile and exercise every expected contact state.
+3. Under supervision, use the four TEST buttons and verify each enabled
+   inverter's readback.
+4. Click **Enable LIVE** to clear TEST and return to the physical RSE.
+5. Confirm that each enabled tile becomes `OK` and that the inverter output
+   follows 100%, 60%, 30%, and 0% as required.
+6. Test restoration to 100%, loss and restoration of RS485, power cycling, and
+   invalid RSE input combinations before handover.
+
+---
+
+# 2. Operation and GUI controls
+
+## 2.1 USB connection bar
+
+| Control | How to use it |
+|---|---|
+| **Port list** | Shows identified SmartPLC devices first. With multiple devices, select the intended COM port. |
+| **Scan** | Rechecks all serial ports using read-only identity requests. One identified SmartPLC connects automatically. |
+| **Connect** | Opens the selected identified SmartPLC. It changes to **Disconnect** while connected. |
+| **Disconnect** | Closes the current USB session. The StampPLC continues controlling the inverters independently. |
+| **Connection status** | Shows COM port, firmware version, and whether a newer bundled firmware is available. |
+
+The Windows application is a configurator and monitor. Normal RSE control
+continues even when the GUI is closed or USB is disconnected.
+
+## 2.2 SETTINGS tab
+
+### Inverter and RS485 buttons
+
+| Button | Function |
+|---|---|
+| **First-time discovery** | Read-only scan of IDs 2-7. It presets detected full-power values in the table but does not save them. Use only at LIVE 100% or before the RSE is installed, with all inverters at full power. |
+| **Save inverter settings** | Validates the table, saves enabled IDs, PV power, verified inverter maximum, RS485 settings, and RSE profile to StampPLC NVS. Online units are verified using bounded Modbus write/readback; offline or unsafe rows remain `PENDING` instead of being discarded. |
+| **Read SmartPLC settings** | Reloads the complete saved inverter, RS485, RSE profile, Wi-Fi, clock, firmware, and OTA state from the connected controller. Use this before editing and again after saving. |
+
+The installed PV power may legitimately exceed the inverter rating. The GUI
+keeps that value and marks the cell with a yellow warning. It does not force
+the PV capacity down to the inverter rating; only the final Modbus target is
+capped.
+
+### Wi-Fi and automatic OTA buttons
+
+| Control | Function |
+|---|---|
+| **SSID** | Select a network detected/saved on the PC, or type its name manually. |
+| **Refresh PC Wi-Fi** | Reloads current and saved Wi-Fi profile names from Windows. If Windows Location access is disabled, the current SSID may be hidden but manual entry still works. |
+| **Password** | Enter the Wi-Fi password. It must be empty for an open network or contain 8-63 UTF-8 bytes. |
+| **Save & connect** | Saves SSID/password in the StampPLC and immediately attempts a connection. |
+| **Retry connection** | Reuses the saved credentials without changing them. |
+| **Enable automatic OTA** | Enables or disables the SmartPLC's own scheduled update client. The nearby text must confirm `AUTO OTA: ON` or `OFF`. |
+| **OTA time** | Selects the start of the daily 60-minute maintenance window. Default: `01:00-01:59`. |
+| **Save OTA time** | Saves the selected maintenance-window start time. |
+| **Sync clock from PC** | Copies the PC's local date and time to the StampPLC RTC immediately. |
+
+### Firmware buttons and indicators
+
+| Control | Function |
+|---|---|
+| **USB flash V1.0.6** | Installs the bundled firmware through USB and verifies the written flash. Intended for first installation, recovery, or migration to the OTA partition layout. Keep power connected. |
+| **Check SmartPLC update** | Asks the SmartPLC to check GitHub. If a newer firmware is available, the GUI asks whether to install it. If none is available, no installation occurs. |
+| **Installed firmware** | Shows the version reported by the connected controller. |
+| **Circular progress indicator** | Shows preparation, write/download percentage, verification, completion, or failure. |
+| **OTA diagnostics** | Shows the last check, last success, failure count, next retry, and latest OTA error. |
+
+SmartPLC firmware OTA and Windows GUI updates are separate. A SmartPLC OTA
+updates the controller. A newer Windows GUI is reported quietly in the
+connection area and does not change the controller by itself.
+
+## 2.3 COMMISSIONING tab
+
+### Live display
+
+| Item | Meaning |
+|---|---|
+| **RSE** | Physical input level and raw DI mask. `INVALID` means the selected profile does not accept the current combination. |
+| **Mode** | `LIVE` in green for physical RSE control, `TEST` in amber for a temporary GUI test, or `OTA` in blue while updating. |
+| **Output** | Last applied output result and its source. `UNCHANGED` means the previous verified inverter setting was deliberately retained. |
+| **Dashed line** | RSE/RES target percentage for the tile. |
+| **Liquid fill** | Current inverter readback level. Its color follows the active RSE percentage. |
+| **Tile value** | Current inverter value in kW. |
+| **Tile border/status** | Normal status, amber transient warning, or full red tile after a confirmed inverter fault. |
+
+The same tank-style display is shown on the StampPLC LCD. The layout adapts
+automatically to one through six enabled inverters.
+
+### Test and commissioning buttons
+
+| Button | Function |
+|---|---|
+| **100% test** | Temporarily requests the calculated 100% target. In LIVE, it is rejected if it would relax a more restrictive physical RSE command. |
+| **60% test** | Temporarily requests 60% of installed PV power, capped by the verified inverter maximum. |
+| **30% test** | Temporarily requests 30% of installed PV power, capped by the verified inverter maximum. |
+| **0% test** | Temporarily requests zero feed-in. |
+| **Enable LIVE** | Clears the GUI test value and immediately reloads the actual physical RSE input for normal control. |
+
+TEST is a commissioning aid, not a permanent operating mode. It expires after
+five minutes and returns to LIVE automatically. A physical RSE transition also
+ends TEST immediately. A live TEST may make the output more restrictive but
+can never release or bypass an active physical reduction.
+
+### Device event log
+
+The log shows USB commands, RSE transitions, Modbus write/readback results,
+periodic health checks, recovery events, discovery, flashing, and OTA
+diagnostics. It is the first place to inspect when a tile is amber or red.
+
+## 2.4 Normal daily operation
+
+After commissioning, the GUI does not need to remain open:
+
+1. The StampPLC continuously reads the RSE inputs.
+2. A valid changed RSE command is debounced and converted to a watt target for
+   every enabled inverter.
+3. Each target is written sequentially and verified by FC03 readback.
+4. If the RSE command does not change, the controller does not repeatedly
+   rewrite the same value.
+5. Periodic round-robin FC03 reads check current state without writing flash or
+   inverter settings.
+6. A recovered inverter is detected automatically and its display/status is
+   refreshed.
+
+---
+
+# 3. Technical reference and supplementary information
+
+## 3.1 Power calculation
+
+The legal/contractual percentage is applied to **installed PV module power**,
+not automatically to inverter nameplate power. The final target is capped by
+the separately verified inverter limit:
 
 ```text
-12 V power supply
-  +12 V  ───────────── StampPLC VIN+
-   0 V   ───────────── StampPLC VIN-
-
-  +12 V  ───────────── RSE relay common
-  RSE K1 (100%) ────── StampPLC DI1
-  RSE K2 ( 60%) ────── StampPLC DI2
-  RSE K3 ( 30%) ────── StampPLC DI3
-  RSE K4 (  0%) ────── StampPLC DI4
-   0 V   ───────────── StampPLC EXCOM_COM
+target W = min(round(installed PV W × RSE percentage), verified inverter limit W)
 ```
 
-This wiring is only for **potential-free RSE contacts**. Never connect a
-switched 230 V RSE output directly to the StampPLC 5-36 V DC inputs. Use a
-properly rated interface relay or isolation module when the RSE circuit uses
-230 V.
+Example: 18,000 Wp of PV modules connected to a 15,000 W inverter.
 
-The PWR-485 power pin is connected directly to StampPLC VIN and therefore also
-carries 12 V. Normally connect only RS485 A/B to an inverter; do not connect
-the 12 V pin unless the inverter documentation explicitly requires it.
+| RSE level | Calculation | Target written |
+|---:|---|---:|
+| 100% | min(18,000 × 1.00, 15,000) | 15,000 W |
+| 60% | min(18,000 × 0.60, 15,000) | 10,800 W |
+| 30% | min(18,000 × 0.30, 15,000) | 5,400 W |
+| 0% | 0 | 0 W |
 
-## Configure inverter IDs 2-7
+Integer nearest-watt calculation avoids the display/write discrepancy caused
+by repeated floating-point conversion.
 
-The compile-time table is in
-[`include/DeviceDefaults.h`](include/DeviceDefaults.h):
+## 3.2 RSE profiles
 
-```cpp
-constexpr InverterDefault INVERTER_DEFAULTS[6] = {
-    // enabled, installed PV module power in watts
-    {true,  15000},  // ID 2
-    {true,  15000},  // ID 3
-    {true,  10000},  // ID 4
-    {false, 10000},  // ID 5 disabled
-    {false, 10000},  // ID 6 disabled
-    {false, 10000},  // ID 7 disabled
-};
-```
+Select the profile required by the responsible grid operator. Do not choose a
+profile by trial and error.
 
-Set `enabled` to `false` for an unused ID. This has the same effect as
-commenting that inverter out while keeping the fixed ID-to-array relationship.
+| GUI profile | Input assignment | No contact | Multiple contacts |
+|---|---|---|---|
+| **Strict 4-contact (legacy)** — default | DI1/2/3/4 = 100/60/30/0% | Invalid; output unchanged | Invalid; output unchanged |
+| **Westnetz 4-contact** | DI1/2/3/4 = K1/K2/K3/K4 | 100% | K1 releases to 100%; otherwise most restrictive wins |
+| **EWE 4-contact (hold last)** | DI1/2/3/4 = 100/60/30/0% | Hold last valid level | Hold last valid level |
+| **VDE FNN / Netze BW 3-contact** | DI2/3/4 = 60/30/0%; DI1 unused | 100% | Most restrictive reduction wins; warning logged |
 
-After first boot, the same values can be changed without recompiling through
-the USB configuration GUI or USB serial commands. Saved NVS configuration
-takes priority over the compiled defaults. Send `reset CONFIRM` over USB after
-changing the table on an already commissioned controller.
+The selected fixed truth table evaluates every DI1-DI4 mask. The firmware
+does not guess the grid operator or silently switch profiles.
 
-Example for ID 3 with 18,000 W installed PV and a verified 15,000 W inverter ceiling:
+## 3.3 Status and fault handling
 
-| RSE level | FC16 value written to ID 3 |
-|---:|---:|
-| 100% | 15000 W |
-| 60% | 10800 W |
-| 30% | 5400 W |
-| 0% | 0 W |
+| Status | Meaning and action |
+|---|---|
+| **OK** | The inverter answered and its readback is valid. |
+| **CHECK** | Configuration/readback needs attention or a transient fault has not yet met the confirmed-error threshold. Inspect the log. |
+| **PENDING** | The setting is saved, but cannot yet be safely verified because the inverter is offline or physical LIVE 100% is unavailable. The ID stays excluded from control until verified. |
+| **Amber tile/border** | One or two consecutive health reads failed; the last good value is retained while the controller retries later. |
+| **Red ERROR tile** | Three consecutive periodic health reads failed, or a confirmed control/readback error exists. Check power, ID, baud rate, A/B polarity, cabling, and termination. |
 
-## Implemented behavior
+A single successful read immediately restores the current value and clears a
+transient communication fault.
 
-- Four debounced, optically isolated RSE inputs with one-hot validation.
-- IDs 2-7, individually enabled and individually assigned installed PV power.
-- Installed PV power may be higher than the inverter rating. The GUI shows a
-  yellow warning but keeps the value. Only the Modbus target is capped by the
-  separately verified inverter limit. For 18 kWp PV on a 15 kW inverter the
-  targets are 15 kW at 100%, 10.8 kW at 60%, 5.4 kW at 30%, and 0 kW.
-- Integer percentage calculation with nearest-watt rounding.
-- Sequential FC16 write to each enabled ID followed by FC03 readback.
-- A failed control transaction retries the complete FC16 + FC03 sequence up
-  to three times with increasing backoff (not merely three FC03 reads). IDs are
-  separated by 500 ms. Retries are bounded; a failed transaction is reported
-  and is never retried automatically in the background.
-- Communication health and control conformance are tracked separately: a
-  responsive inverter with a limit that does not match RES is reported as a
-  write/control fault, not as an RS485-offline fault.
-- Read-only FC03 probe of every enabled inverter during startup, before the
-  saved RSE command is evaluated or applied.
-- Periodic readback is FC03-only. It detects an externally changed inverter
-  limit, but never writes it back automatically; only a new RSE transition or
-  an explicit, confirmed USB command can write an inverter.
-- Round-robin FC03 refresh in both DRY and LIVE modes, even while the RSE input
-  is invalid. Only one enabled ID is polled every two seconds. One successful
-  read immediately refreshes the displayed value and clears a fault; a full
-  red ERROR tile requires three consecutive failed polls. The first two misses
-  retain the last good value and use an amber warning border.
-- microSD CSV fields: time, raw RSE mask, percentage, inverter ID, configured
-  maximum, requested watts, readback watts, and result.
-- USB CDC configuration commands and a matching Windows desktop GUI.
-- Color LCD dashboard that automatically divides into 1-6 inverter tiles.
-  Every tile fills vertically to the active RSE percentage and shows its ID,
-  percentage, and calculated target in kW. The header shows DRY/LIVE, while
-  the footer shows RS485 health and SD status. Rendering uses an off-screen
-  canvas to avoid flicker. The 240x135 landscape layout uses 1x1, 2x1, 3x1,
-  2x2, or 3x2 grids for 1, 2, 3, 4, or 5-6 enabled inverters respectively.
-  A single header shows the global RSE percentage. Each tile is a tank-style
-  gauge: cyan fill height represents the inverter FC03 value, and an amber
-  dashed horizontal line represents the RES target. A compact `R... I...` kW
-  line provides the exact values. This remains readable in the six-inverter
-  3x2 layout. Any failed inverter uses a full red tile.
-  Liquid level, RES setpoint, value counters, color transition, wave surface,
-  and bubbles animate at approximately 30 FPS without changing Modbus timing.
-- Onboard RTC time, RGB alarm, and buzzer.
-- A commissioning safety lock is retained for new or previously locked devices;
-  normal customer operation uses LIVE, TEST, and OTA states.
-- Optional Wi-Fi station mode used only for time synchronization and GitHub
-  Release OTA. No access point or inbound network service is opened.
-- Two 3 MB application slots permit future firmware updates without USB.
-  Firmware is downloaded over certificate-validated HTTPS and accepted only
-  when its SHA-256 matches the release manifest.
-- Automatic OTA is off by default. When enabled in the GUI, the controller
-  runs only in its configured 60-minute daily window. The default
-  **01:00–01:59 Europe/Berlin** window is intentionally selected as a
-  non-daylight maintenance period. Installation starts only while the clock is
-  valid, the physical RSE is stable at 100%, TEST is inactive, Modbus control
-  is idle, and all enabled inverters are verified and ready. These checks are
-  repeated during download. An unsafe or missed window waits until the next
-  day instead of moving the update into daytime. The configured time is not an
-  astronomical sunrise/sunset calculation; keep it in a verified non-daylight
-  period for the installation location.
+## 3.4 Modbus write protection and inverter lifetime
 
-## Build and flash
+- Control uses sequential FC16 write followed by FC03 verification.
+- A failed control transaction retries the complete write/readback sequence up
+  to three times with increasing backoff.
+- Retries are bounded; they do not continue without limit in the background.
+- Enabled IDs are separated by 500 ms to reduce bus collisions and inverter load.
+- Periodic monitoring is FC03 read-only, one inverter at a time.
+- The same power limit is not continuously rewritten when the RSE state has
+  not changed.
+- An externally changed limit is detected but is not automatically written
+  back until a new RSE transition or explicit confirmed command occurs.
+
+These rules separate communication health from control conformance and avoid
+unnecessary writes to inverter non-volatile memory.
+
+## 3.5 OTA safety and recovery
+
+Automatic OTA is off by default. When enabled, the controller checks only in
+its configured 60-minute daily window. Installation begins only when:
+
+- Wi-Fi is connected and the clock is valid;
+- the physical RSE is stable at 100%;
+- TEST is inactive;
+- Modbus control is idle; and
+- every enabled inverter is verified and ready.
+
+The conditions are checked again during download. If any condition becomes
+unsafe, the update is aborted and waits for a later window. Firmware is
+downloaded over certificate-validated HTTPS and accepted only when its SHA-256
+matches the signed release manifest. Two application slots allow first-boot
+validation and automatic rollback if the new application cannot confirm a
+healthy startup. Saved inverter, RS485, RSE profile, Wi-Fi, clock, and OTA
+settings remain in NVS across a normal update or rollback.
+
+Keep the configured OTA window within a verified non-daylight period for the
+installation location. The default `01:00` is a time-based maintenance window,
+not an astronomical sunrise/sunset calculation.
+
+## 3.6 LCD and indicators
+
+- **LIVE**: green; normal physical RSE control.
+- **TEST**: amber; temporary GUI commissioning value.
+- **OTA**: blue; firmware checking, downloading, verifying, or installing.
+- The LCD divides into 1, 2, 3, 4, 5, or 6 tiles according to enabled IDs.
+- The dashed level shows the RSE target; animated liquid shows inverter
+  readback. Text remains centered and a confirmed failed inverter uses a full
+  red tile.
+- The RGB alarm and buzzer provide local fault indication.
+
+## 3.7 Logging and fallback USB commands
+
+The GUI uses the same text protocol available through a 115200-baud USB serial
+terminal:
+
+| Command | Purpose |
+|---|---|
+| `help` | List available commands |
+| `show` | Read controller state and saved settings |
+| `probe all` | FC03 read-only probe of all enabled IDs |
+| `probe 3` | FC03 read-only probe of ID 3 |
+
+Probe commands never write an inverter value. When a FAT32 microSD card is
+available, CSV logging records time, RSE mask, percentage, inverter ID,
+configured power, requested watts, readback watts, and result.
+
+## 3.8 Developer build and release assets
 
 ```powershell
 cd stamplc_14a_bridge
@@ -227,94 +450,41 @@ cd stamplc_14a_bridge
 ..\.venv\Scripts\platformio.exe device monitor
 ```
 
-Insert a FAT32-formatted microSD card. Connect the StampPLC USB data port to a
-Windows computer. The firmware appears as a USB serial COM port at 115200 baud.
-
-## Windows USB configuration GUI
-
-For customers, run the standalone application (no Python installation needed):
-
-```text
-release\14a_Bridge.exe
-```
-
-The customer GUI is a native Windows Forms application and requires only the
-standard .NET Framework included with Windows 10/11.
-
-For development, the equivalent Python source version can be run with:
-
-```powershell
-.\.venv\Scripts\python.exe .\stamplc_14a_bridge\tools\stamplc_usb_gui.py
-```
-
-The GUI is divided into **Settings** and **Commissioning** tabs. It can:
-
-- scan and connect to the StampPLC COM port;
-- read the current RSE state and saved configuration;
-- perform a read-only FC03 probe of all enabled inverter IDs;
-- enable/disable inverter IDs 2-7;
-- set each inverter's installed PV module power;
-- configure RS485 baud and the power-limit register;
-- synchronize the StampPLC RTC from the PC;
-- install the bundled V1.0.6 firmware over USB with a live circular progress
-  indicator, percentage, completion verification, and clear failure state;
-- select an SSID from the PC's current/saved Wi-Fi profiles, save the
-  SmartPLC Wi-Fi credentials, and show connection/IP/RSSI state. Windows may
-  require Location access to identify the currently connected SSID; saved
-  profiles remain selectable and the SSID can always be typed manually;
-- show the SmartPLC automatic-OTA state explicitly as **ON**, **OFF**, or
-  **NOT READ**, and manually reload all saved SmartPLC inverter, RS485,
-  Wi-Fi, firmware, and OTA settings;
-- check or install SmartPLC GitHub OTA releases and enable/disable the
-  SmartPLC's automatic OTA client;
-- check the separately published Windows GUI version silently in the
-  background. A prompt appears only for a newer published version and offers
-  a per-version **do not remind again** option; this never changes SmartPLC
-  firmware;
-- switch between dry-run and live control with confirmation;
-- test 100%, 60%, 30%, and 0%;
-- reapply the level currently selected by the RSE;
-- display the live USB device/event log.
-
-The GUI uses the text command interface, so a standard serial terminal can be
-used as a fallback. Enter `help` to list commands and `show` to read all
-settings. Use `probe all` to read register `0x04E5` from every enabled ID, or
-`probe 3` to read only ID 3. Probe commands never write an inverter value.
-Successful setting commands are saved immediately to NVS.
-
-The standalone USB flasher uses the ESP32-S3 ROM loader (`--no-stub`) at
-460800 baud and verifies all written regions. This avoids relying on external
-esptool stub-data files on a first-time customer's PC.
-
-## OTA release assets
-
-Every OTA-capable GitHub release must contain these two assets:
+Every OTA-capable GitHub release must include:
 
 - `14a_bridge_firmware.bin`
 - `ota_manifest.json`
 
-The manifest contains the semantic version, the version-specific release URL,
-and the lowercase SHA-256 of the firmware. V1.0.0 must first be upgraded once
-through the GUI's USB flash button because it has no Wi-Fi/OTA update client;
-V1.0.1 also installs the larger 3 MB-per-slot partition layout used by future
-releases.
+Maintainers must follow the [production release checklist](docs/RELEASE_PROCESS.md).
 
-## Commissioning sequence
+---
 
-1. Keep dry-run enabled and operate all four RSE states.
-2. Confirm that DI1/DI2/DI3/DI4 decode as 100/60/30/0% and that no all-open
-   transition occurs during normal RSE switching.
-3. Confirm inverter IDs 2-7, installed PV capacities, and verified inverter limits.
-4. Verify that register `0x04E5`, two registers, high-word-first, is correct for
-   every connected inverter firmware version.
-5. Disconnect other Modbus masters or coordinate access to prevent RS485
-   collisions.
-6. Use the GUI manual test buttons under supervision, then confirm FC03 readback
-   and actual inverter output.
-7. Only then disable dry-run and test physical RSE transitions.
-8. Test power loss, RSE invalid states, RS485 disconnection, SD removal/full
-   card, and restoration to 100%.
+# 4. Release history
 
-The 100/60/30/0 input mapping must match the contact table supplied by the
-responsible grid operator. Change the mapping in `decodePercent()` if its RSE
-contact assignment differs.
+## V1.0.6 — RSE profiles and commissioning safety
+
+- Added four selectable RSE truth tables.
+- Made the physical RSE authoritative during live TEST.
+- Added safe pending configuration and LIVE-100% inverter verification.
+- Restricted OTA installation to a stable, safe operating state.
+- Preserved earlier schema settings through migration.
+
+See [V1.0.6 release notes](docs/RELEASE_NOTES_V1.0.6.md).
+
+## V1.0.5 — Explicit operating states and scheduled OTA
+
+- Added green LIVE, amber TEST, and blue OTA states.
+- Added the five-minute TEST timeout and immediate return on physical RSE
+  transition.
+- Added configurable daily OTA time and PC/NTP clock synchronization.
+- Added IDs 2-7 with separate installed PV power and inverter rated maximum.
+
+## V1.0.4 — Production OTA and serial-port identification
+
+- Added signed manifests, primary/backup downloads, bounded retry, persistent
+  diagnostics, first-boot validation, and rollback support.
+- Added automatic SmartPLC serial-port identification.
+- Added dedicated OTA display and progress reporting.
+
+Earlier tagged releases remain available on the
+[GitHub Releases page](https://github.com/tatsuo25103/14a-bridge/releases).
