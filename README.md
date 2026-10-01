@@ -162,6 +162,36 @@ Beispiel: 18 kW PV an einem 15-kW-Wechselrichter:
 Das Profil darf nicht durch Ausprobieren gewählt werden. Maßgeblich sind die
 schriftlichen Vorgaben des zuständigen Netzbetreibers.
 
+### 3.3 RSE-Empfänger und Kompatibilität
+
+Ein RSE-Profil beschreibt die **Kontaktbelegung und Auswertelogik**, nicht ein
+festes Fabrikat. Programmierbare Rundsteuerempfänger desselben Typs können je
+nach Netzbetreiber unterschiedlich parametriert sein. Deshalb müssen vor der
+Inbetriebnahme immer Typenschild, Parametrierung, Klemmenplan und Kontakttabelle
+des konkreten Standorts geprüft werden.
+
+| RSE-Profil | Zugeordnete Hersteller / Typen | Bewertung |
+|---|---|---|
+| **Strict 4-contact** | Kein exklusiver Gerätetyp. Möglich sind z. B. Langmatz **EK893 / EK893A**, Landis+Gyr **FTY263 / FTU263** sowie Swistec **SRE-6 / SRvario**, sofern sie auf K1=100 %, K2=60 %, K3=30 %, K4=0 % mit genau einem aktiven Kontakt parametriert sind. | Bedingt kompatibel; Parametrierung und Verdrahtung müssen nachgewiesen werden. |
+| **Westnetz 4-contact** | Ein für Westnetz parametrierter FRE mit vier potenzialfreien Ausgängen K1–K4. Westnetz legt die Funktionen 100/60/30/0 % fest, schreibt in den veröffentlichten Unterlagen aber keinen einzigen Hersteller oder Typ verbindlich vor. | Die Westnetz-Kontaktbelegung ist dokumentiert; das konkrete Gerät ist standortabhängig. |
+| **EWE 4-contact (hold last)** | EWE nennt Landis+Gyr **RCR161**, System Edf, je nach Netzgebiet 175 oder 210 Hz. | Der Gerätetyp ist dokumentiert, die Übereinstimmung seiner jeweiligen Parametrierung mit der hier implementierten Vierstufen-„hold last“-Logik ist jedoch **nicht bestätigt**. |
+| **VDE FNN / Netze BW 3-contact** | Netze BW nennt Langmatz **EK893 / EK893A** mit drei Reduktionskontakten: kein Kontakt=100 %, K2=60 %, K3=30 %, K4=0 %. | Dokumentierte logische Übereinstimmung mit diesem Profil. |
+
+Quellen: [Westnetz TAB Niederspannung](https://www.westnetz.de/content/dam/revu-global/westnetz/documents/bauen/ihr-weg-zum-netzanschluss/niederspannung/tab-niederspannung-01022025.pdf),
+[Westnetz Inbetriebnahmenachweis](https://kundendaten.westnetz.de/Bestaetigung-Einspeisemanagement_Nachweis-FRE.pdf),
+[EWE Technische Anforderungen](https://www.ewe-netz.de/-/media/ewe-netz/downloads/2023_eisman_dokument_25-100_kw.pdf),
+[Netze BW Technische Mindestanforderungen](https://assets.cdn.netze-bw.de/xytfb1vrn7of/uSbS6i373cDrgXvZ1RTb3/1ea3ee4dfe27e1ec25019fd9d9cbef82/technische-mindestanforderungen-zur-steuerung-elektrischer-anlagen.pdf)
+und [VDE FNN Schnittstellenhinweis](https://www.vde.com/resource/blob/2352664/6599b9aad89846ca5f668ad5f4fc9e64/vde-fnn-hinweis-schnittstellen-steuerungseinrichtung-data.pdf).
+Herstellerinformationen zu programmierbaren Relaisausgängen:
+[Landis+Gyr FTY263](https://www.landisgyr.com/webfoo/wp-content/uploads/product-files/LandisGyr_FTY263_TechData_EN1.pdf),
+[Landis+Gyr FTU263](https://www.landisgyr.com/webfoo/wp-content/uploads/product-files/FTU263_Technical_Data_D000041641_b.pdf)
+und [Swistec SRE-6](https://swistec.ch/wp-content/uploads/2016/05/SRE-6_deutsch-2.0_swistec_rundsteuerung_empfaenger.pdf).
+
+> **Freigaberegel:** Ein Empfänger darf nur dann in die Liste der verifizierten
+> Geräte aufgenommen werden, wenn Netzbetreiber, Hersteller und Typ,
+> Parametrierungsstand, Klemmenbelegung und ein dokumentierter Funktionstest
+> zusammen vorliegen. Der Modellname allein reicht nicht aus.
+
 ## 4. OTA und Wiederherstellung
 
 Automatische OTA-Installation beginnt nur bei gültiger Uhrzeit, im

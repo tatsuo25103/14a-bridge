@@ -62,11 +62,40 @@ Do not choose a profile by trial and error.
 | EWE 4-contact (hold last) | DI1/2/3/4 = 100/60/30/0% | Hold the last valid level | Hold the last valid level |
 | VDE FNN / Netze BW 3-contact | DI2/3/4 = 60/30/0%; DI1 unused | 100% | Strongest reduction applies and a warning is logged |
 
-Westnetz explicitly states that K1 releases full feed-in even during a
-temporary overlap. If K1 is not active, the contact requesting the strongest
-reduction applies. EWE instead requires the plant to retain the last valid
-level when more than one or no level relay is active. These rules are not
-interchangeable.
+### RSE receiver models and compatibility
+
+An RSE profile defines the **relay assignment and decoding logic**, not a
+specific receiver brand. Programmable receivers of the same model may have
+different parameters for different grid operators. Always verify the actual
+nameplate, parameter set, terminal diagram and contact truth table before
+commissioning.
+
+| RSE profile | Associated manufacturers / models | Assessment |
+|---|---|---|
+| **Strict 4-contact** | No exclusive model. Potentially suitable devices include Langmatz **EK893 / EK893A**, Landis+Gyr **FTY263 / FTU263**, and Swistec **SRE-6 / SRvario**, but only when programmed for K1=100%, K2=60%, K3=30%, K4=0% with exactly one active contact. | Conditionally compatible; parameterization and wiring must be verified. |
+| **Westnetz 4-contact** | A four-output FRE parameterized for Westnetz. Westnetz documents K1/K2/K3/K4 as 100/60/30/0%, but its published documents do not mandate one receiver manufacturer or model. | The Westnetz contact assignment is documented; the installed receiver is site-specific. |
+| **EWE 4-contact (hold last)** | EWE specifies Landis+Gyr **RCR161**, Edf system, at 175 or 210 Hz depending on the network area. | The hardware model is documented, but its site-specific parameterization has **not been confirmed** to match this firmware's four-level hold-last logic. |
+| **VDE FNN / Netze BW 3-contact** | Netze BW specifies Langmatz **EK893 / EK893A** with three reduction relays: no contact=100%, K2=60%, K3=30%, K4=0%. | Documented logical match to this profile. |
+
+Sources: [Westnetz low-voltage TAB](https://www.westnetz.de/content/dam/revu-global/westnetz/documents/bauen/ihr-weg-zum-netzanschluss/niederspannung/tab-niederspannung-01022025.pdf),
+[Westnetz commissioning record](https://kundendaten.westnetz.de/Bestaetigung-Einspeisemanagement_Nachweis-FRE.pdf),
+[EWE technical requirements](https://www.ewe-netz.de/-/media/ewe-netz/downloads/2023_eisman_dokument_25-100_kw.pdf),
+[Netze BW minimum technical requirements](https://assets.cdn.netze-bw.de/xytfb1vrn7of/uSbS6i373cDrgXvZ1RTb3/1ea3ee4dfe27e1ec25019fd9d9cbef82/technische-mindestanforderungen-zur-steuerung-elektrischer-anlagen.pdf),
+and the [VDE FNN interface note](https://www.vde.com/resource/blob/2352664/6599b9aad89846ca5f668ad5f4fc9e64/vde-fnn-hinweis-schnittstellen-steuerungseinrichtung-data.pdf).
+Manufacturer information on programmable relay outputs:
+[Landis+Gyr FTY263](https://www.landisgyr.com/webfoo/wp-content/uploads/product-files/LandisGyr_FTY263_TechData_EN1.pdf),
+[Landis+Gyr FTU263](https://www.landisgyr.com/webfoo/wp-content/uploads/product-files/FTU263_Technical_Data_D000041641_b.pdf),
+and [Swistec SRE-6](https://swistec.ch/wp-content/uploads/2016/05/SRE-6_deutsch-2.0_swistec_rundsteuerung_empfaenger.pdf).
+
+> **Qualification rule:** add a receiver to the verified compatibility list
+> only when the grid operator, manufacturer and model, parameter revision,
+> terminal assignment and a documented functional test are all known. A model
+> name alone is not sufficient.
+
+The following flowcharts document the behavior implemented by this firmware.
+The overlap and hold-last behavior must still be compared with the written
+contact table for the installed receiver; a profile name is not proof that the
+site-specific receiver parameters match it.
 
 ### Strict 4-contact (legacy) flow
 

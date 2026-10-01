@@ -151,6 +151,32 @@ flowchart TD
 
 不可用嘗試方式選擇 Profile，必須依當地電網營運商的書面規定設定。
 
+### 3.3 RSE 接收器型號與相容性
+
+RSE Profile 定義的是**接點配置與解碼邏輯**，不是固定的接收器廠牌。同一型號
+的可程式化接收器，可能依不同電網營運商載入不同參數。裝機前必須核對現場設備
+銘牌、參數版本、端子圖及接點真值表，不能只憑型號判定相容。
+
+| RSE Profile | 對應廠牌／型號 | 判定 |
+|---|---|---|
+| **Strict 4-contact** | 沒有唯一指定型號。Langmatz **EK893 / EK893A**、Landis+Gyr **FTY263 / FTU263**、Swistec **SRE-6 / SRvario** 等可程式化設備，只有在設定為 K1=100%、K2=60%、K3=30%、K4=0%，且正常狀態只有一個接點動作時才適用。 | 條件相容；必須確認參數與接線。 |
+| **Westnetz 4-contact** | 依 Westnetz 參數化、提供 K1–K4 四個無電位輸出的 FRE。Westnetz 文件規定 100/60/30/0% 接點功能，但沒有指定唯一廠牌或型號。 | Westnetz 接點定義已有文件；現場設備型號依案場而定。 |
+| **EWE 4-contact (hold last)** | EWE 文件指定 Landis+Gyr **RCR161**、Edf 系統，依區域使用 175 或 210 Hz。 | 已確認硬體型號，但尚未證明現場參數與目前韌體的四段 hold-last 邏輯完全一致。 |
+| **VDE FNN / Netze BW 3-contact** | Netze BW 指定 Langmatz **EK893 / EK893A**；三個降載接點為：無接點=100%、K2=60%、K3=30%、K4=0%。 | 與本 Profile 有文件支持的邏輯對應。 |
+
+資料來源：[Westnetz 低壓技術規範](https://www.westnetz.de/content/dam/revu-global/westnetz/documents/bauen/ihr-weg-zum-netzanschluss/niederspannung/tab-niederspannung-01022025.pdf)、
+[Westnetz 驗收表](https://kundendaten.westnetz.de/Bestaetigung-Einspeisemanagement_Nachweis-FRE.pdf)、
+[EWE 技術要求](https://www.ewe-netz.de/-/media/ewe-netz/downloads/2023_eisman_dokument_25-100_kw.pdf)、
+[Netze BW 最低技術要求](https://assets.cdn.netze-bw.de/xytfb1vrn7of/uSbS6i373cDrgXvZ1RTb3/1ea3ee4dfe27e1ec25019fd9d9cbef82/technische-mindestanforderungen-zur-steuerung-elektrischer-anlagen.pdf)
+及 [VDE FNN 介面指南](https://www.vde.com/resource/blob/2352664/6599b9aad89846ca5f668ad5f4fc9e64/vde-fnn-hinweis-schnittstellen-steuerungseinrichtung-data.pdf)。
+可程式化繼電器輸出的原廠資料：
+[Landis+Gyr FTY263](https://www.landisgyr.com/webfoo/wp-content/uploads/product-files/LandisGyr_FTY263_TechData_EN1.pdf)、
+[Landis+Gyr FTU263](https://www.landisgyr.com/webfoo/wp-content/uploads/product-files/FTU263_Technical_Data_D000041641_b.pdf)
+及 [Swistec SRE-6](https://swistec.ch/wp-content/uploads/2016/05/SRE-6_deutsch-2.0_swistec_rundsteuerung_empfaenger.pdf)。
+
+> **列入已驗證名單的條件：**必須同時記錄電網營運商、接收器廠牌與型號、
+> 參數版本、端子配置及實際功能測試結果。只有型號名稱不足以宣告相容。
+
 ## 4. OTA 與回復
 
 自動 OTA 只有在 RTC 有效、位於設定維護時窗、實體 RSE 穩定 100%、LIVE、
