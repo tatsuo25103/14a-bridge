@@ -187,3 +187,46 @@ ModbusResult ModbusRtuMaster::writeAndVerify(uint8_t slave, uint16_t address,
                     " attempts: " + lastDetail;
     return result;
 }
+
+ModbusResult ModbusRtuMaster::writeBitCommandAndVerify(
+    uint8_t slave, uint16_t address, uint16_t commandValue, uint16_t bitMask,
+    bool expectedSet, uint32_t timeoutMs, uint8_t retries) {
+    ModbusResult result;
+    if (retries == 0) retries = 1;
+    for (uint8_t attempt = 0; attempt < retries; ++attempt) {
+        // P17 bit fields use protocol-defined enable/disable command words
+        // rather than a replacement value. Register 0x0007 bit 13, for
+        // example, uses 0x2000 to enable and 0xDFFF to disable feed-in.
+        uint8_t request[11] = {
+            slave, FC_WRITE_MULTIPLE,
+            static_cast<uint8_t>(address >> 8), static_cast<uint8_t>(address),
+            0, 1, 2,
+            static_cast<uint8_t>(commandValue >> 8),
+            static_cast<uint8_t>(commandValue), 0, 0
+        };
+        const uint16_t crc = crc16(request, 9);
+        request[9] = crc & 0xFF;
+        request[10] = crc >> 8;
+        transmit(request, sizeof(request));
+
+        uint8_t response[16];
+        size_t length = 0;
+        String ackDetail;
+        const uint32_t ackTimeoutMs = timeoutMs < 400 ? timeoutMs : 400;
+        receive(slave, FC_WRITE_MULTIPLE, response, sizeof(response), length,
+                ackTimeoutMs, ackDetail);
+        responsiveDelay(300 + attempt * 250);
+
+        result = readRaw(slave, address, 1, timeoutMs);
+        if (result.ok && ((result.value & bitMask) != 0) == expectedSet) {
+            result.detail = "bit command and FC03 readback verified on attempt " +
+                            String(attempt + 1) + "/" + String(retries);
+            return result;
+        }
+        if (attempt + 1 < retries) responsiveDelay(500 + attempt * 250);
+    }
+    result.ok = false;
+    result.detail = "bit command not verified after " + String(retries) +
+                    " attempts: " + result.detail;
+    return result;
+}

@@ -78,6 +78,35 @@ constexpr uint32_t calculateFeedInLimit(uint32_t installedPvPower,
         ? calculatePowerLimit(installedPvPower, percent) : inverterCeiling;
 }
 
+constexpr uint8_t RSE_LEVEL_COUNT = 4;
+constexpr uint8_t RSE_LEVEL_100_INDEX = 0;
+constexpr uint8_t RSE_LEVEL_60_INDEX = 1;
+constexpr uint8_t RSE_LEVEL_30_INDEX = 2;
+constexpr uint8_t RSE_LEVEL_0_INDEX = 3;
+
+constexpr int8_t rseLevelIndex(uint8_t percent) {
+    return percent == 100 ? RSE_LEVEL_100_INDEX
+         : percent == 60 ? RSE_LEVEL_60_INDEX
+         : percent == 30 ? RSE_LEVEL_30_INDEX
+         : percent == 0 ? RSE_LEVEL_0_INDEX : -1;
+}
+
+constexpr uint32_t configuredRsePower(const uint32_t (&levels)[RSE_LEVEL_COUNT],
+                                      uint8_t percent) {
+    return rseLevelIndex(percent) < 0
+        ? 0U : levels[static_cast<uint8_t>(rseLevelIndex(percent))];
+}
+
+constexpr bool configuredFeedEnabled(uint8_t enabledMask, uint8_t percent) {
+    return rseLevelIndex(percent) >= 0 &&
+           (enabledMask & (1U << static_cast<uint8_t>(rseLevelIndex(percent)))) != 0;
+}
+
+constexpr uint32_t effectiveFeedOutput(uint32_t registerReadback,
+                                       bool feedEnabled) {
+    return feedEnabled ? registerReadback : 0U;
+}
+
 // Integer-only display animation. Wattage remains exact end-to-end; the LCD
 // renderer may derive a percentage from this value, but never reconstructs
 // watts from that percentage.

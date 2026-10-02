@@ -17,7 +17,7 @@ FC03-Rücklesen. Unveränderte Sollwerte werden nicht ständig neu geschrieben.
 > Vorgaben des Netzbetreibers noch Abnahme oder Zertifizierung.
 
 [Neueste Version herunterladen](https://github.com/tatsuo25103/14a-bridge/releases/latest)
-· [V1.0.7 Versionshinweise](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.7.de.md)
+· [V1.0.8 Versionshinweise](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.8.de.md)
 · [Ausführliche technische Referenz](stamplc_14a_bridge/README.md)
 
 ## 1. Installation
@@ -29,7 +29,7 @@ FC03-Rücklesen. Unveränderte Sollwerte werden nicht ständig neu geschrieben.
 
 ### 1.2 Windows-Anwendung installieren
 
-1. `14a_Bridge_Setup_V1.0.7.exe` aus den
+1. `14a_Bridge_Setup_V1.0.8.exe` aus den
    [GitHub Releases](https://github.com/tatsuo25103/14a-bridge/releases/latest)
    laden.
 2. Setup starten und optional die Desktop-Verknüpfung anlegen.
@@ -67,7 +67,7 @@ entsprechen.
 
 ### 1.4 Erstinbetriebnahme
 
-1. Bei neuer StampPLC unter **Settings** mit **USB flash V1.0.7** Bootloader,
+1. Bei neuer StampPLC unter **Settings** mit **USB flash V1.0.8** Bootloader,
    OTA-Partitionen und Firmware installieren. Versorgung nicht unterbrechen.
 2. **Read SmartPLC settings** ausführen.
 3. RSE-Profil und RS485 (`19200`, Register `0x04E5` für die geprüften
@@ -101,7 +101,7 @@ ist lesend und speichert erst nach ausdrücklichem **Save inverter settings**.
 | **Enable automatic OTA** | Aktiviert die geplante Firmwareprüfung der StampPLC. |
 | **Save OTA time** | Setzt den Beginn des täglichen 60-Minuten-Wartungsfensters; Standard `01:00` Europe/Berlin. |
 | **Sync clock from PC** | Stellt die RTC; bei WLAN erfolgt zusätzlich tägliche NTP-Synchronisation. |
-| **USB flash V1.0.7** | Installiert das mitgelieferte Firmwarepaket mit Fortschritt und Schreibprüfung. |
+| **USB flash V1.0.8** | Installiert das mitgelieferte Firmwarepaket mit Fortschritt und Schreibprüfung. |
 | **Check SmartPLC update** | Prüft signierte SmartPLC-Updates; bei neuer Version folgt eine Bestätigungsfrage. |
 
 ### 2.2 Commissioning
@@ -228,8 +228,10 @@ allein ist keine elektrische Abnahme oder rechtliche Zertifizierung.
 
 ## 6. Versionen
 
-V1.0.7 ergänzt gehärtetes OTA-Rollback, ELF-SHA-256-Bindung der
-Sicherungspartition, lokalen A+C-Countdown, zusätzliche Rückkehr-Sicherheits-
-bedingungen und korrigierte OTA-Statusmeldungen. Frühere Versionen bleiben auf
-der [Release-Seite](https://github.com/tatsuo25103/14a-bridge/releases)
-verfügbar.
+V1.0.8 ergänzt vier frei editierbare Leistungswerte für 100/60/30/0 %, eine
+separate **Feedin Enable**-Freigabe je Stufe sowie begrenzte Schreib-/
+Rückleseprüfung. Register `0x0007` wird im Normalbetrieb nur bei einer wirklich
+erforderlichen Zustandsänderung geschrieben. Details stehen in den
+[V1.0.8 Versionshinweisen](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.8.de.md).
+Frühere Versionen bleiben auf der
+[Release-Seite](https://github.com/tatsuo25103/14a-bridge/releases) verfügbar.

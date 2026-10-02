@@ -142,6 +142,28 @@ static_assert(calculateFeedInLimit(10000, 15000, 100) == 10000,
 static_assert(calculateFeedInLimit(30000, 15000, 60) == 15000,
               "percentage result can never exceed inverter ceiling");
 
+constexpr uint32_t editableRseTargets[RSE_LEVEL_COUNT] = {
+    15000, 10800, 5400, 250
+};
+static_assert(configuredRsePower(editableRseTargets, 100) == 15000,
+              "editable 100 percent target");
+static_assert(configuredRsePower(editableRseTargets, 60) == 10800,
+              "editable 60 percent target");
+static_assert(configuredRsePower(editableRseTargets, 30) == 5400,
+              "editable 30 percent target");
+static_assert(configuredRsePower(editableRseTargets, 0) == 250,
+              "editable zero percent target");
+static_assert(configuredRsePower(editableRseTargets, 42) == 0,
+              "unsupported level is rejected");
+static_assert(configuredFeedEnabled(0x0D, 100), "100 percent feed enabled");
+static_assert(!configuredFeedEnabled(0x0D, 60), "60 percent feed disabled");
+static_assert(configuredFeedEnabled(0x0D, 30), "30 percent feed enabled");
+static_assert(configuredFeedEnabled(0x0D, 0), "zero percent feed enabled");
+static_assert(effectiveFeedOutput(10800, true) == 10800,
+              "enabled feed displays the verified register value");
+static_assert(effectiveFeedOutput(10800, false) == 0,
+              "disabled feed displays zero without changing the register");
+
 static_assert(!elapsedAtLeast(1049, 1000, 50), "debounce not early");
 static_assert(elapsedAtLeast(1050, 1000, 50), "debounce exact boundary");
 static_assert(elapsedAtLeast(0x00000010U, 0xFFFFFFF0U, 32),

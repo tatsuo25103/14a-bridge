@@ -47,6 +47,10 @@ constexpr uint32_t MODBUS_DEVICE_GAP_MS = 500;
 constexpr uint32_t DISPLAY_FRAME_MS = 33;
 constexpr uint32_t MANUAL_TEST_TIMEOUT_MS = 5UL * 60UL * 1000UL;
 constexpr uint32_t MANUAL_ROLLBACK_HOLD_MS = 5000;
+constexpr uint16_t FEED_PERMISSION_REGISTER = 0x0007;
+constexpr uint16_t FEED_PERMISSION_BIT = 0x2000;
+constexpr uint16_t FEED_PERMISSION_ENABLE_COMMAND = 0x2000;
+constexpr uint16_t FEED_PERMISSION_DISABLE_COMMAND = 0xDFFF;
 
 AppConfig config;
 HardwareSerial rs485(1);
@@ -70,6 +74,8 @@ uint32_t lastReadback[INVERTER_COUNT] = {};
 bool inverterHealthy[INVERTER_COUNT] = {};
 bool inverterHasReadback[INVERTER_COUNT] = {};
 bool inverterAtTarget[INVERTER_COUNT] = {};
+bool inverterFeedStateKnown[INVERTER_COUNT] = {};
+bool inverterFeedEnabled[INVERTER_COUNT] = {};
 uint8_t inverterFailureStreak[INVERTER_COUNT] = {};
 uint8_t periodicReadCursor = 0;
 uint32_t lastPeriodicReadAt = 0;
@@ -537,8 +543,46 @@ int16_t decodePercent(uint8_t mask) {
 }
 
 uint32_t wattsForPercent(const InverterConfig& inverter, uint8_t percent) {
-    return calculateFeedInLimit(inverter.maxPvPowerW,
-                                inverter.inverterLimitW, percent);
+    const uint32_t configured = configuredRsePower(inverter.rsePowerW, percent);
+    return inverter.inverterLimitW > 0 && configured > inverter.inverterLimitW
+        ? inverter.inverterLimitW : configured;
+}
+
+bool feedEnabledForPercent(const InverterConfig& inverter, uint8_t percent) {
+    return configuredFeedEnabled(inverter.feedEnabledMask, percent);
+}
+
+ModbusResult setFeedPermission(uint8_t index, bool enabled, uint8_t retries,
+                               bool writeWhenReadUnknown = false) {
+    const uint8_t slaveId = slaveIdForIndex(index);
+    ModbusResult current = modbus.readRaw(
+        slaveId, FEED_PERMISSION_REGISTER, 1, config.responseTimeoutMs);
+    if (current.ok) {
+        inverterFeedStateKnown[index] = true;
+        inverterFeedEnabled[index] = (current.value & FEED_PERMISSION_BIT) != 0;
+        if (inverterFeedEnabled[index] == enabled) {
+            current.detail = "feed permission already " +
+                String(enabled ? "enabled" : "disabled") + "; write skipped";
+            return current;
+        }
+    } else if (!writeWhenReadUnknown) {
+        // Register 0x0007 may stop or restart an inverter. During normal
+        // operation, never guess its state and never write after a failed
+        // read. The only caller allowed to override this rule is the explicit
+        // power-verification fail-safe, which must attempt to disable feed-in.
+        current.detail = "feed permission unreadable; conservative no-write: " +
+                         current.detail;
+        return current;
+    }
+    ModbusResult result = modbus.writeBitCommandAndVerify(
+        slaveId, FEED_PERMISSION_REGISTER,
+        enabled ? FEED_PERMISSION_ENABLE_COMMAND : FEED_PERMISSION_DISABLE_COMMAND,
+        FEED_PERMISSION_BIT, enabled, config.responseTimeoutMs, retries);
+    if (result.ok) {
+        inverterFeedStateKnown[index] = true;
+        inverterFeedEnabled[index] = enabled;
+    }
+    return result;
 }
 
 bool controlEnabled(uint8_t index) {
@@ -604,47 +648,75 @@ bool applyLevel(uint8_t percent, const String& reason) {
         updateDisplay(true);
         const uint8_t slaveId = slaveIdForIndex(i);
         const uint32_t requested = wattsForPercent(config.inverters[i], percent);
+        const bool requestedFeedEnabled =
+            feedEnabledForPercent(config.inverters[i], percent);
         lastRequested[i] = requested;
 
         String detail;
         if (config.dryRun) {
             detail = "SAFE LOCK: no Modbus write";
         } else {
+            bool feedOk = true;
+            if (!requestedFeedEnabled) {
+                const ModbusResult feedResult = setFeedPermission(
+                    i, false, config.verifyRetries);
+                feedOk = feedResult.ok;
+                detail = "feed disabled before power update: " + feedResult.detail;
+            }
             // Never trust a cached readback when deciding whether a write can
             // be skipped: another controller may have changed the inverter.
             // A fresh FC03 avoids unnecessary FC16 writes without sacrificing
             // correctness.
-            ModbusResult result = modbus.readRaw(
-                slaveId, config.modbusRegister, config.modbusQuantity,
-                config.responseTimeoutMs);
+            ModbusResult result;
+            if (feedOk) result = modbus.readRaw(
+                    slaveId, config.modbusRegister, config.modbusQuantity,
+                    config.responseTimeoutMs);
+            else result.detail = "feed permission change failed; power write blocked";
             serviceTimeCriticalInputs();
             const bool rseSuperseded = rawRseMask != stableRseMask &&
                 elapsedAtLeast(millis(), rawChangedAt, config.debounceMs);
             if (rseSuperseded) {
                 superseded = true;
                 detail = "RSE changed during pre-write verification";
-            } else if (result.ok && result.value == requested) {
+            } else if (feedOk && result.ok && result.value == requested) {
                 inverterAtTarget[i] = true;
-                detail = "fresh readback already at target; write skipped";
-            } else {
+                detail += (detail.isEmpty() ? "" : "; ");
+                detail += "fresh readback already at target; write skipped";
+            } else if (feedOk) {
                 result = modbus.writeAndVerify(
                     slaveId, config.modbusRegister, config.modbusQuantity,
                     requested, config.responseTimeoutMs, config.verifyRetries);
                 detail = result.detail;
             }
+            if (feedOk && !result.ok) {
+                const ModbusResult failSafe = setFeedPermission(
+                    i, false, config.verifyRetries, true);
+                detail += "; POWER VERIFY FAILED -> feed disable " +
+                          String(failSafe.ok ? "verified: " : "FAILED: ") +
+                          failSafe.detail;
+                feedOk = false;
+            } else if (requestedFeedEnabled) {
+                const ModbusResult feedResult = setFeedPermission(
+                    i, true, config.verifyRetries);
+                feedOk = feedResult.ok;
+                detail += "; feed enable " +
+                          String(feedResult.ok ? "verified: " : "FAILED: ") +
+                          feedResult.detail;
+            }
             updateInverterHealth(i, result);
-            inverterAtTarget[i] = result.ok && result.value == requested;
+            inverterAtTarget[i] = result.ok && result.value == requested && feedOk;
             // Preserve the last verified value across transient timeouts. A
             // timeout is not evidence that the inverter suddenly contains 0.
             if (result.ok) {
                 lastReadback[i] = result.value;
                 inverterHasReadback[i] = true;
             }
-            allOk = allOk && result.ok && !superseded;
+            allOk = allOk && result.ok && feedOk && !superseded;
             Serial.printf(
-                "WRITE ID=%u TARGET=%lu READBACK=%lu STATUS=%s DETAIL=%s\r\n",
+                "WRITE ID=%u TARGET=%lu READBACK=%lu FEED=%s STATUS=%s DETAIL=%s\r\n",
                 slaveId, requested, lastReadback[i],
-                result.ok ? "OK" : "ERROR", result.detail.c_str());
+                requestedFeedEnabled ? "ON" : "OFF",
+                (result.ok && feedOk) ? "OK" : "ERROR", detail.c_str());
         }
         if (config.dryRun) allOk = allOk && inverterHealthy[i];
         eventLog.append(timestampNow(), reason, stableRseMask, percent,
@@ -888,14 +960,33 @@ void pollNextEnabledInverter() {
         const ModbusResult result = modbus.readRaw(
             slaveIdForIndex(index), config.modbusRegister, config.modbusQuantity,
             config.responseTimeoutMs);
-        updateInverterHealth(index, result);
+        ModbusResult verificationResult = result;
         if (result.ok && !config.dryRun && activePercent >= 0) {
             const uint32_t expected = wattsForPercent(
                 config.inverters[index], static_cast<uint8_t>(activePercent));
-            inverterAtTarget[index] = result.value == expected;
+            const bool expectedFeed = feedEnabledForPercent(
+                config.inverters[index], static_cast<uint8_t>(activePercent));
+            const ModbusResult feedResult = modbus.readRaw(
+                slaveIdForIndex(index), FEED_PERMISSION_REGISTER, 1,
+                config.responseTimeoutMs);
+            if (feedResult.ok) {
+                inverterFeedStateKnown[index] = true;
+                inverterFeedEnabled[index] =
+                    (feedResult.value & FEED_PERMISSION_BIT) != 0;
+                inverterAtTarget[index] = result.value == expected &&
+                    inverterFeedEnabled[index] == expectedFeed;
+            } else {
+                inverterFeedStateKnown[index] = false;
+                inverterAtTarget[index] = false;
+                verificationResult = feedResult;
+            }
         }
+        // Treat the power and feed-permission reads as one health sample.
+        // Otherwise a successful power read would reset the failure streak
+        // immediately before every repeated Register 0x0007 timeout.
+        updateInverterHealth(index, verificationResult);
 
-        if (result.ok && previousFailures > 0) {
+        if (verificationResult.ok && previousFailures > 0) {
             const String detail = wasConfirmedFault
                 ? "communication recovered" : "transient read failure cleared";
             Serial.printf("HEALTH ID=%u STATUS=OK DETAIL=%s\r\n",
@@ -904,16 +995,16 @@ void pollNextEnabledInverter() {
                             activePercent, slaveIdForIndex(index),
                             config.inverters[index].maxPvPowerW,
                             lastRequested[index], result.value, detail);
-        } else if (!result.ok &&
+        } else if (!verificationResult.ok &&
                    inverterFailureStreak[index] == HEALTH_FAILURE_THRESHOLD) {
             Serial.printf("HEALTH ID=%u STATUS=ERROR DETAIL=%s after %u consecutive failures\r\n",
-                          slaveIdForIndex(index), result.detail.c_str(),
+                          slaveIdForIndex(index), verificationResult.detail.c_str(),
                           HEALTH_FAILURE_THRESHOLD);
             eventLog.append(timestampNow(), "periodic_offline", stableRseMask,
                             activePercent, slaveIdForIndex(index),
                             config.inverters[index].maxPvPowerW,
                             lastRequested[index], lastReadback[index],
-                            result.detail + "; confirmed after " +
+                            verificationResult.detail + "; confirmed after " +
                                 String(HEALTH_FAILURE_THRESHOLD) + " failures");
         }
         refreshOutputHealthFromCommunication();
@@ -1013,9 +1104,18 @@ void printStatus() {
                       slaveIdForIndex(i), inverter.enabled ? "yes" : "no",
                       inverter.maxPvPowerW, inverter.inverterLimitW,
                       wattsForPercent(inverter, 100), wattsForPercent(inverter, 60),
-                      wattsForPercent(inverter, 30), 0,
+                       wattsForPercent(inverter, 30), wattsForPercent(inverter, 0),
                       lastRequested[i], lastReadback[i],
                       statusOk ? "yes" : "no");
+        Serial.printf("RSECFG ID=%u P100=%lu F100=%s P60=%lu F60=%s P30=%lu F30=%s P0=%lu F0=%s\r\n",
+                      slaveIdForIndex(i), wattsForPercent(inverter, 100),
+                      feedEnabledForPercent(inverter, 100) ? "yes" : "no",
+                      wattsForPercent(inverter, 60),
+                      feedEnabledForPercent(inverter, 60) ? "yes" : "no",
+                      wattsForPercent(inverter, 30),
+                      feedEnabledForPercent(inverter, 30) ? "yes" : "no",
+                      wattsForPercent(inverter, 0),
+                      feedEnabledForPercent(inverter, 0) ? "yes" : "no");
         Serial.printf("RATING ID=%u STATUS=%s\r\n", slaveIdForIndex(i),
                       config.inverters[i].ratingVerified ? "VERIFIED" : "PENDING");
     }
@@ -1065,8 +1165,17 @@ void printGuiStatus() {
                       slaveIdForIndex(i), inverter.enabled ? "yes" : "no",
                       inverter.maxPvPowerW, inverter.inverterLimitW,
                       wattsForPercent(inverter, 100), wattsForPercent(inverter, 60),
-                      wattsForPercent(inverter, 30), 0, lastRequested[i],
+                       wattsForPercent(inverter, 30), wattsForPercent(inverter, 0), lastRequested[i],
                       lastReadback[i], statusOk ? "yes" : "no");
+        Serial.printf("@ RSECFG ID=%u P100=%lu F100=%s P60=%lu F60=%s P30=%lu F30=%s P0=%lu F0=%s\r\n",
+                      slaveIdForIndex(i), wattsForPercent(inverter, 100),
+                      feedEnabledForPercent(inverter, 100) ? "yes" : "no",
+                      wattsForPercent(inverter, 60),
+                      feedEnabledForPercent(inverter, 60) ? "yes" : "no",
+                      wattsForPercent(inverter, 30),
+                      feedEnabledForPercent(inverter, 30) ? "yes" : "no",
+                      wattsForPercent(inverter, 0),
+                      feedEnabledForPercent(inverter, 0) ? "yes" : "no");
         Serial.printf("@ RATING ID=%u STATUS=%s\r\n", slaveIdForIndex(i),
                       config.inverters[i].ratingVerified ? "VERIFIED" : "PENDING");
     }
@@ -1192,6 +1301,59 @@ void processUsbCommand(String line) {
                       otaManager.automatic() ? "yes" : "no",
                       saved ? "OK" : "ERROR",
                       saved ? "saved" : "NVS save failed");
+        return;
+    }
+
+    int curveId = 0;
+    unsigned long curve100 = 0, curve60 = 0, curve30 = 0, curve0 = 0;
+    int feed100 = -1, feed60 = -1, feed30 = -1, feed0 = -1;
+    char curveConfirmation[16] = {};
+    if (sscanf(line.c_str(),
+               "rsecfg %d %lu %d %lu %d %lu %d %lu %d %15s",
+               &curveId, &curve100, &feed100, &curve60, &feed60,
+               &curve30, &feed30, &curve0, &feed0,
+               curveConfirmation) == 10) {
+        if (!validId(curveId)) return;
+        const bool flagsValid = (feed100 == 0 || feed100 == 1) &&
+            (feed60 == 0 || feed60 == 1) &&
+            (feed30 == 0 || feed30 == 1) && (feed0 == 0 || feed0 == 1);
+        if (!flagsValid || strcasecmp(curveConfirmation, "CONFIRM") != 0) {
+            Serial.printf("RSECFG ID=%d STATUS=ERROR DETAIL=use: rsecfg <id> <100W> <100feed0|1> <60W> <60feed0|1> <30W> <30feed0|1> <0W> <0feed0|1> CONFIRM\r\n",
+                          curveId);
+            return;
+        }
+        const uint8_t index = indexForSlaveId(static_cast<uint8_t>(curveId));
+        const InverterConfig previous = config.inverters[index];
+        const uint32_t levels[RSE_LEVEL_COUNT] = {
+            static_cast<uint32_t>(curve100), static_cast<uint32_t>(curve60),
+            static_cast<uint32_t>(curve30), static_cast<uint32_t>(curve0)
+        };
+        for (uint8_t level = 0; level < RSE_LEVEL_COUNT; ++level) {
+            if ((config.modbusQuantity == 1 && levels[level] > 65535UL) ||
+                (previous.ratingVerified && previous.inverterLimitW > 0 &&
+                 levels[level] > previous.inverterLimitW)) {
+                Serial.printf("RSECFG ID=%d STATUS=ERROR DETAIL=RSE target exceeds writable or verified inverter limit\r\n",
+                              curveId);
+                return;
+            }
+            config.inverters[index].rsePowerW[level] = levels[level];
+        }
+        config.inverters[index].feedEnabledMask =
+            static_cast<uint8_t>((feed100 ? 0x01 : 0) |
+                                 (feed60 ? 0x02 : 0) |
+                                 (feed30 ? 0x04 : 0) |
+                                 (feed0 ? 0x08 : 0));
+        if (!saveConfig()) {
+            config.inverters[index] = previous;
+            Serial.printf("RSECFG ID=%d STATUS=ERROR DETAIL=configuration save failed; previous curve kept\r\n",
+                          curveId);
+            return;
+        }
+        Serial.printf("RSECFG ID=%d STATUS=OK P100=%lu F100=%s P60=%lu F60=%s P30=%lu F30=%s P0=%lu F0=%s DETAIL=saved; Register 0x0007 feed commands may stop the inverter\r\n",
+                      curveId, curve100, feed100 ? "yes" : "no",
+                      curve60, feed60 ? "yes" : "no",
+                      curve30, feed30 ? "yes" : "no",
+                      curve0, feed0 ? "yes" : "no");
         return;
     }
     int otaHour = -1;
@@ -2087,8 +2249,17 @@ void updateDisplay(bool force) {
             // Wattage is the single source of truth. Animate it using integer
             // arithmetic, then derive liquid height only for rendering. This
             // avoids all percent -> watt round trips and float accumulation.
+            // Register 0x04E5 remains a diagnostic/control readback even when
+            // grid feed is disabled. The customer-facing output gauge must
+            // represent effective feed-in, so show 0 W for an RSE level whose
+            // Feedin Enable option is off without altering the register value.
+            const bool effectiveFeedEnabled = invalid ||
+                feedEnabledForPercent(config.inverters[inverterIndex],
+                                      static_cast<uint8_t>(activePercent));
             const uint32_t targetWatts = hasReadback && !confirmedFault
-                ? lastReadback[inverterIndex] : 0U;
+                ? effectiveFeedOutput(lastReadback[inverterIndex],
+                                      effectiveFeedEnabled)
+                : 0U;
             uint32_t& shownWatts = displayedInvWatts[inverterIndex];
             shownWatts = approachDisplayedWatts(shownWatts, targetWatts);
             const float targetFill = displayMaximum == 0 ? 0.0f :

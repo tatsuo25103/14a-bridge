@@ -9,9 +9,9 @@ This checklist is required for every production firmware release.
 - Never email, upload, commit, or include the private key in an installer.
 - Devices accept only manifests signed by the matching public key embedded in firmware.
 
-The current workstation key is stored outside the project at:
+The current workstation key is stored in the ignored local directory:
 
-`C:\Users\lf.wu\Documents\14a Logger\.release-secrets\14a_bridge_ota_private.pem`
+`.release-secrets\14a_bridge_ota_private.pem`
 
 ## Build and sign
 

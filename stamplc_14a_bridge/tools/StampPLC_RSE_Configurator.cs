@@ -120,7 +120,7 @@ namespace StampPlcRseConfigurator
 
     internal sealed class MainForm : Form
     {
-        private const string ReleaseVersion = "V1.0.7";
+        private const string ReleaseVersion = "V1.0.8";
         private static readonly Color Surface = Color.FromArgb(16, 22, 30);
         private static readonly Color Panel = Color.FromArgb(25, 34, 45);
         private static readonly Color Accent = Color.FromArgb(0, 220, 210);
@@ -136,6 +136,7 @@ namespace StampPlcRseConfigurator
         private readonly Label _mode = new Label();
         private readonly Label _result = new Label();
         private readonly Label _settingsNotice = new Label();
+        private readonly Label _feedRiskNotice = new Label();
         private readonly DataGridView _grid = new DataGridView();
         private readonly TextBox _baud = new TextBox();
         private readonly TextBox _register = new TextBox();
@@ -173,6 +174,7 @@ namespace StampPlcRseConfigurator
         private int _physicalRsePercent = -1;
         private string _currentMode = "";
         private bool _updatingWifiUi;
+        private bool _updatingSettingsGrid;
         private bool? _pendingAutomaticOta;
         private volatile bool _scanningPorts;
         private string _connectedFirmwareVersion = "";
@@ -206,6 +208,10 @@ namespace StampPlcRseConfigurator
             @"^COMMIT ID=([1-7]) STATUS=(OK|CLAMPED|PENDING|ERROR) CONFIG=(\d+) DETAIL=(.*)$");
         private static readonly Regex RatingPattern = new Regex(
             @"^RATING ID=([1-7]) STATUS=(VERIFIED|PENDING)$");
+        private static readonly Regex RseConfigPattern = new Regex(
+            @"^RSECFG ID=([2-7]) P100=(\d+) F100=(yes|no) P60=(\d+) F60=(yes|no) P30=(\d+) F30=(yes|no) P0=(\d+) F0=(yes|no)$");
+        private static readonly Regex RseConfigStatusPattern = new Regex(
+            @"^RSECFG ID=([2-7]) STATUS=(OK|ERROR)(?: P100=(\d+) F100=(yes|no) P60=(\d+) F60=(yes|no) P30=(\d+) F30=(yes|no) P0=(\d+) F0=(yes|no))? DETAIL=(.*)$");
         private static readonly Regex WifiPattern = new Regex(
             @"^WIFI VERSION=([^\s]+) SAVED=(yes|no) CONNECTED=(yes|no) AUTO=(yes|no) SSIDHEX=([^\s]*) IP=([^\s]+) RSSI=(-?\d+)$");
         private static readonly Regex OtaPattern = new Regex(
@@ -222,7 +228,7 @@ namespace StampPlcRseConfigurator
             Text = "14a Bridge - USB Configurator " + ReleaseVersion;
             string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "mes_logo.ico");
             if (File.Exists(iconPath)) Icon = new Icon(iconPath);
-            ClientSize = new Size(1120, 800);
+            ClientSize = new Size(1380, 860);
             MinimumSize = new Size(1000, 700);
             Font = new Font("Segoe UI", 9F);
             BackColor = Surface;
@@ -347,8 +353,9 @@ namespace StampPlcRseConfigurator
             settingsPage.Controls.Add(settingsLayout);
 
             var configurationBox = NewGroup("Inverter & RS485 settings  |  saved in StampPLC");
-            var configurationLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+            var configurationLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4 };
             configurationLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            configurationLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
             configurationLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
             configurationLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
             ConfigureGrid();
@@ -398,8 +405,13 @@ namespace StampPlcRseConfigurator
                 NewButton("Read SmartPLC settings", ReadSmartPlcSettings),
                 _settingsNotice
             });
-            configurationLayout.Controls.Add(settingsDetailsFlow, 0, 1);
-            configurationLayout.Controls.Add(settingsActionsFlow, 0, 2);
+            _feedRiskNotice.Text = "WARNING: Feed into grid changes Register 0x0007 bit 13 and may stop or restart the inverter. Use only with manufacturer approval.";
+            _feedRiskNotice.ForeColor = Color.FromArgb(255, 184, 55);
+            _feedRiskNotice.Dock = DockStyle.Fill;
+            _feedRiskNotice.Padding = new Padding(5, 5, 0, 0);
+            configurationLayout.Controls.Add(_feedRiskNotice, 0, 1);
+            configurationLayout.Controls.Add(settingsDetailsFlow, 0, 2);
+            configurationLayout.Controls.Add(settingsActionsFlow, 0, 3);
             configurationBox.Controls.Add(configurationLayout);
             settingsLayout.Controls.Add(configurationBox, 0, 0);
 
@@ -564,7 +576,7 @@ namespace StampPlcRseConfigurator
             // text is changing. On some DPI/layout combinations that could
             // temporarily push the final Status column outside the viewport.
             _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
-            _grid.ScrollBars = ScrollBars.Vertical;
+            _grid.ScrollBars = ScrollBars.Both;
             _grid.BackgroundColor = Color.FromArgb(8, 13, 19);
             _grid.BorderStyle = BorderStyle.None;
             _grid.GridColor = Color.FromArgb(55, 75, 90);
@@ -572,8 +584,12 @@ namespace StampPlcRseConfigurator
             _grid.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle
             {
                 BackColor = Color.FromArgb(20, 48, 62), ForeColor = Accent,
-                Font = new Font("Segoe UI Semibold", 9F), Alignment = DataGridViewContentAlignment.MiddleLeft
+                Font = new Font("Segoe UI Semibold", 8.5F),
+                Alignment = DataGridViewContentAlignment.MiddleLeft,
+                WrapMode = DataGridViewTriState.True
             };
+            _grid.ColumnHeadersHeight = 42;
+            _grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
             _grid.DefaultCellStyle = new DataGridViewCellStyle
             {
                 BackColor = Panel, ForeColor = TextColor, SelectionBackColor = Color.FromArgb(0, 90, 100),
@@ -589,6 +605,7 @@ namespace StampPlcRseConfigurator
                 {
                     _ratingIssues[e.RowIndex] = false;
                     RefreshPvWarning(e.RowIndex);
+                    if (!_updatingSettingsGrid) RecalculateRseTargets(e.RowIndex);
                 }
                 if (e.RowIndex >= 0 && _grid.Columns[e.ColumnIndex].Name == "InverterLimit")
                 {
@@ -618,29 +635,58 @@ namespace StampPlcRseConfigurator
             _grid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "Control enabled" });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Maximum", HeaderText = "Installed PV power (W)" });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "InverterLimit", HeaderText = "Inverter rated max (W)" });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "P100", HeaderText = "100% power (W)" });
+            _grid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "F100", HeaderText = "Feedin Enable" });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "P60", HeaderText = "60% power (W)" });
+            _grid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "F60", HeaderText = "Feedin Enable" });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "P30", HeaderText = "30% power (W)" });
+            _grid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "F30", HeaderText = "Feedin Enable" });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "P0", HeaderText = "0% power (W)" });
+            _grid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "F0", HeaderText = "Feedin Enable" });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Target", HeaderText = "Last target", ReadOnly = true });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Readback", HeaderText = "Readback", ReadOnly = true });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Health", HeaderText = "Status", ReadOnly = true });
+            foreach (string name in new[] { "F100", "F60", "F30", "F0" })
+                _grid.Columns[name].ToolTipText =
+                    "HIGH-RISK P17 command: changes register 0x0007 bit 13 and may stop/restart the inverter.";
             for (int id = 2; id <= 7; ++id)
-                _grid.Rows.Add(id.ToString(CultureInfo.InvariantCulture), false, "10000", "--", "--", "--", "--");
+                _grid.Rows.Add(id.ToString(CultureInfo.InvariantCulture), false,
+                    "10000", "--", "10000", true, "6000", true,
+                    "3000", true, "0", true, "--", "--", "--");
             _grid.SizeChanged += delegate { LayoutGridColumns(); };
             LayoutGridColumns();
         }
 
         private void LayoutGridColumns()
         {
-            if (_grid.Columns.Count != 7 || _grid.ClientSize.Width <= 0) return;
-            int available = Math.Max(700, _grid.ClientSize.Width - 2);
-            int[] percent = { 9, 12, 18, 18, 15, 15, 13 };
-            int used = 0;
+            if (_grid.Columns.Count != 15 || _grid.ClientSize.Width <= 0) return;
+            int[] widths = { 60, 80, 125, 120, 90, 65, 90, 65, 90, 65, 85, 60, 85, 85, 75 };
             for (int i = 0; i < _grid.Columns.Count; ++i)
+                _grid.Columns[i].Width = widths[i];
+        }
+
+        private void RecalculateRseTargets(int row)
+        {
+            if (row < 0 || row >= _grid.Rows.Count) return;
+            uint pv = ParseWatts(_grid.Rows[row].Cells["Maximum"].Value);
+            uint limit = ParseWatts(_grid.Rows[row].Cells["InverterLimit"].Value);
+            if (pv == 0) return;
+            _updatingSettingsGrid = true;
+            try
             {
-                int width = i == _grid.Columns.Count - 1
-                    ? available - used
-                    : available * percent[i] / 100;
-                _grid.Columns[i].Width = Math.Max(70, width);
-                used += _grid.Columns[i].Width;
+                _grid.Rows[row].Cells["P100"].Value = CalculatedTarget(pv, limit, 100);
+                _grid.Rows[row].Cells["P60"].Value = CalculatedTarget(pv, limit, 60);
+                _grid.Rows[row].Cells["P30"].Value = CalculatedTarget(pv, limit, 30);
+                _grid.Rows[row].Cells["P0"].Value = "0";
             }
+            finally { _updatingSettingsGrid = false; }
+        }
+
+        private static string CalculatedTarget(uint pv, uint limit, uint percent)
+        {
+            ulong calculated = ((ulong)pv * percent + 50UL) / 100UL;
+            if (limit > 0 && calculated > limit) calculated = limit;
+            return calculated.ToString(CultureInfo.InvariantCulture);
         }
 
         private static GroupBox NewGroup(string title)
@@ -1287,8 +1333,16 @@ namespace StampPlcRseConfigurator
         private void SaveAll(object sender, EventArgs e)
         {
             var commands = new List<string>();
+            bool usesFeedDisable = false;
             uint baud;
             ushort address;
+            if (ParseReleaseVersion(_connectedFirmwareVersion) < new Version(1, 0, 8))
+            {
+                ShowInlineNotice(
+                    "Per-RSE editable power and Feed-to-grid settings require SmartPLC V1.0.8 or newer. Update firmware before saving.",
+                    Color.FromArgb(255, 184, 55), "[SETTINGS]");
+                return;
+            }
             for (int row = 0; row < 6; ++row)
             {
                 bool enabled = Convert.ToBoolean(_grid.Rows[row].Cells["Enabled"].Value ?? false);
@@ -1320,6 +1374,39 @@ namespace StampPlcRseConfigurator
                 if (inverterLimit > 0)
                     commands.Add("limit " + id + " " + inverterLimit + " CONFIRM");
                 commands.Add("commit " + id + " " + (enabled ? "on" : "off") + " " + maximum);
+                uint[] targets = new uint[4];
+                string[] powerColumns = { "P100", "P60", "P30", "P0" };
+                string[] feedColumns = { "F100", "F60", "F30", "F0" };
+                bool[] feed = new bool[4];
+                for (int level = 0; level < 4; ++level)
+                {
+                    string targetText = Convert.ToString(
+                        _grid.Rows[row].Cells[powerColumns[level]].Value) ?? "";
+                    if (!uint.TryParse(targetText.Trim(), out targets[level]))
+                    {
+                        _grid.CurrentCell = _grid.Rows[row].Cells[powerColumns[level]];
+                        ShowInlineNotice("ID " + id + " " + powerColumns[level] +
+                            " must be a whole number of watts (zero is allowed).",
+                            Color.OrangeRed, "[SETTINGS]");
+                        return;
+                    }
+                    if (inverterLimit > 0 && targets[level] > inverterLimit)
+                    {
+                        _grid.CurrentCell = _grid.Rows[row].Cells[powerColumns[level]];
+                        ShowInlineNotice("ID " + id + " " + powerColumns[level] +
+                            " exceeds the verified inverter maximum " + inverterLimit + " W.",
+                            Color.OrangeRed, "[SETTINGS]");
+                        return;
+                    }
+                    feed[level] = Convert.ToBoolean(
+                        _grid.Rows[row].Cells[feedColumns[level]].Value ?? false);
+                    if (!feed[level]) usesFeedDisable = true;
+                }
+                commands.Add("rsecfg " + id + " " +
+                    targets[0] + " " + (feed[0] ? "1" : "0") + " " +
+                    targets[1] + " " + (feed[1] ? "1" : "0") + " " +
+                    targets[2] + " " + (feed[2] ? "1" : "0") + " " +
+                    targets[3] + " " + (feed[3] ? "1" : "0") + " CONFIRM");
             }
             if (!uint.TryParse(_baud.Text.Trim(), out baud) || baud < 1200 || baud > 1000000)
             {
@@ -1337,6 +1424,13 @@ namespace StampPlcRseConfigurator
                 return;
             }
             _register.BackColor = Color.FromArgb(7, 13, 19);
+            if (usesFeedDisable && MessageBox.Show(this,
+                "One or more Feed-to-grid boxes are disabled.\r\n\r\n" +
+                "When that RSE level becomes active, SmartPLC will change P17 register 0x0007 bit 13. " +
+                "Depending on inverter firmware and parallel configuration, this command may stop or restart the inverter.\r\n\r\n" +
+                "Save these high-risk settings?",
+                "Feed-to-grid stop risk", MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning) != DialogResult.Yes) return;
             commands.Insert(0, "reg 0x" + address.ToString("X4"));
             commands.Insert(0, "baud " + baud);
             if (ParseReleaseVersion(_connectedFirmwareVersion) >= new Version(1, 0, 6))
@@ -1881,8 +1975,15 @@ namespace StampPlcRseConfigurator
             {
                 _result.Text = "Output: " + match.Groups[1].Value +
                     " | source: " + match.Groups[2].Value;
+                if (match.Groups[1].Value != "UNCHANGED")
+                {
+                    int outputPercent;
+                    if (int.TryParse(match.Groups[1].Value.TrimEnd('%'), out outputPercent))
+                        _rsePercent = outputPercent;
+                }
                 _result.ForeColor = match.Groups[2].Value == "LIVE" ? Color.FromArgb(56, 211, 159) :
                     (match.Groups[2].Value == "TEST" ? Color.FromArgb(255, 184, 55) : Color.OrangeRed);
+                UpdateGauges();
                 return;
             }
             match = ModePattern.Match(line.Trim());
@@ -1990,6 +2091,27 @@ namespace StampPlcRseConfigurator
                 _otaScheduleStatus.ForeColor = clockOk ? Accent : Color.OrangeRed;
                 return;
             }
+            match = RseConfigStatusPattern.Match(line.Trim());
+            if (match.Success)
+            {
+                int row = FindRowForId(int.Parse(match.Groups[1].Value,
+                    CultureInfo.InvariantCulture));
+                bool ok = match.Groups[2].Value == "OK";
+                if (row >= 0 && ok && match.Groups[3].Success)
+                    ApplyRseConfigRow(row, match, 3);
+                ShowInlineNotice("ID " + match.Groups[1].Value + " RSE settings: " +
+                    match.Groups[2].Value + " - " + match.Groups[11].Value,
+                    ok ? Accent : Color.OrangeRed, "[SETTINGS]");
+                return;
+            }
+            match = RseConfigPattern.Match(line.Trim());
+            if (match.Success)
+            {
+                int row = FindRowForId(int.Parse(match.Groups[1].Value,
+                    CultureInfo.InvariantCulture));
+                if (row >= 0 && !background) ApplyRseConfigRow(row, match, 2);
+                return;
+            }
             bool legacyIdLine = false;
             match = IdPattern.Match(line.Trim());
             if (!match.Success)
@@ -2006,11 +2128,18 @@ namespace StampPlcRseConfigurator
                 // operator has just ticked or typed but not saved yet.
                 if (!background)
                 {
-                    _grid.Rows[row].Cells["Enabled"].Value = match.Groups[2].Value == "yes";
-                    _grid.Rows[row].Cells["Maximum"].Value = match.Groups[3].Value;
-                    string inverterLimit = legacyIdLine ? match.Groups[3].Value : match.Groups[4].Value;
-                    _grid.Rows[row].Cells["InverterLimit"].Value = inverterLimit == "0"
-                        ? "--" : inverterLimit;
+                    _updatingSettingsGrid = true;
+                    try
+                    {
+                        _grid.Rows[row].Cells["Enabled"].Value = match.Groups[2].Value == "yes";
+                        _grid.Rows[row].Cells["Maximum"].Value = match.Groups[3].Value;
+                        string inverterLimit = legacyIdLine ? match.Groups[3].Value : match.Groups[4].Value;
+                        _grid.Rows[row].Cells["InverterLimit"].Value = inverterLimit == "0"
+                            ? "--" : inverterLimit;
+                    }
+                    finally { _updatingSettingsGrid = false; }
+                    if (ParseReleaseVersion(_connectedFirmwareVersion) < new Version(1, 0, 8))
+                        RecalculateRseTargets(row);
                 }
                 string target = legacyIdLine ? match.Groups[4].Value : match.Groups[5].Value;
                 string readback = legacyIdLine ? match.Groups[5].Value : match.Groups[6].Value;
@@ -2068,6 +2197,7 @@ namespace StampPlcRseConfigurator
                         string watts = discoveredWatts.ToString(CultureInfo.InvariantCulture);
                         _grid.Rows[row].Cells["Maximum"].Value = watts;
                         _grid.Rows[row].Cells["InverterLimit"].Value = watts;
+                        RecalculateRseTargets(row);
                         _grid.Rows[row].Cells["Health"].Value = "DISCOVERED";
                         _limitIssues[row] = false;
                         _ratingIssues[row] = false;
@@ -2145,10 +2275,41 @@ namespace StampPlcRseConfigurator
                 uint maximum = ParseWatts(_grid.Rows[row].Cells["Maximum"].Value);
                 uint inverterLimit = ParseWatts(_grid.Rows[row].Cells["InverterLimit"].Value);
                 uint readback = ParseWatts(_grid.Rows[row].Cells["Readback"].Value);
+                string feedColumn = _rsePercent == 100 ? "F100" :
+                    (_rsePercent == 60 ? "F60" :
+                    (_rsePercent == 30 ? "F30" :
+                    (_rsePercent == 0 ? "F0" : "")));
+                bool feedEnabled = string.IsNullOrEmpty(feedColumn) ||
+                    Convert.ToBoolean(_grid.Rows[row].Cells[feedColumn].Value ?? false);
+                uint effectiveOutput = EffectiveDisplayedOutput(readback, feedEnabled);
                 string health = Convert.ToString(_grid.Rows[row].Cells["Health"].Value) ?? "--";
                 _gauges[row].SetState(enabled, _rsePercent,
-                    inverterLimit == 0 ? maximum : inverterLimit, readback, health);
+                    inverterLimit == 0 ? maximum : inverterLimit, effectiveOutput, health);
             }
+        }
+
+        private static uint EffectiveDisplayedOutput(uint registerReadback,
+                                                     bool feedEnabled)
+        {
+            return feedEnabled ? registerReadback : 0U;
+        }
+
+        private void ApplyRseConfigRow(int row, Match match, int firstPowerGroup)
+        {
+            _updatingSettingsGrid = true;
+            try
+            {
+                string[] powerColumns = { "P100", "P60", "P30", "P0" };
+                string[] feedColumns = { "F100", "F60", "F30", "F0" };
+                int group = firstPowerGroup;
+                for (int level = 0; level < 4; ++level)
+                {
+                    _grid.Rows[row].Cells[powerColumns[level]].Value = match.Groups[group++].Value;
+                    _grid.Rows[row].Cells[feedColumns[level]].Value =
+                        match.Groups[group++].Value == "yes";
+                }
+            }
+            finally { _updatingSettingsGrid = false; }
         }
 
         private void RefreshPvWarning(int row)
@@ -2218,7 +2379,18 @@ namespace StampPlcRseConfigurator
                    new PortChoice("COM9", false, "").ToString().Contains("UNPROGRAMMED") &&
                    ParseReleaseVersion("1.0.4") < ParseReleaseVersion(ReleaseVersion) &&
                    ParseReleaseVersion("1.0.6") < ParseReleaseVersion(ReleaseVersion) &&
-                   ParseReleaseVersion("1.0.7") == ParseReleaseVersion(ReleaseVersion) &&
+                   ParseReleaseVersion("1.0.7") < ParseReleaseVersion(ReleaseVersion) &&
+                   ParseReleaseVersion("1.0.8") == ParseReleaseVersion(ReleaseVersion) &&
+                   RseConfigPattern.IsMatch(
+                       "RSECFG ID=3 P100=15000 F100=yes P60=10800 F60=yes P30=5400 F30=yes P0=0 F0=no") &&
+                   RseConfigStatusPattern.IsMatch(
+                       "RSECFG ID=3 STATUS=OK P100=15000 F100=yes P60=10800 F60=yes P30=5400 F30=yes P0=0 F0=no DETAIL=saved") &&
+                   CalculatedTarget(18000, 15000, 100) == "15000" &&
+                   CalculatedTarget(18000, 15000, 60) == "10800" &&
+                   CalculatedTarget(18000, 15000, 30) == "5400" &&
+                   CalculatedTarget(18000, 15000, 0) == "0" &&
+                   EffectiveDisplayedOutput(10800, true) == 10800 &&
+                   EffectiveDisplayedOutput(10800, false) == 0 &&
                    ShouldAutoConnect(1, false) &&
                    !ShouldAutoConnect(2, false) &&
                    !ShouldAutoConnect(1, true) &&

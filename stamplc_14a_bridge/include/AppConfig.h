@@ -17,13 +17,20 @@ struct InverterConfig {
     // Verified effective 100% feed-in ceiling. This is normally the inverter
     // rating, or maxPvPowerW when the PV array is smaller than the inverter.
     uint32_t inverterLimitW = 0;
+    // Editable per-RSE targets. They are initially derived from installed PV
+    // power, but are persisted independently so installers may use rounded or
+    // grid-operator-specific values.
+    uint32_t rsePowerW[RSE_LEVEL_COUNT] = {};
+    // One bit per rsePowerW entry. Existing installations migrate with every
+    // bit enabled to preserve their pre-V1.0.8 feed-permission behaviour.
+    uint8_t feedEnabledMask = 0x0F;
     bool ratingVerified = false;
 };
 
 struct AppConfig {
 private:
     static constexpr uint32_t CONFIG_MAGIC = 0x41313442UL;  // "A14B"
-    static constexpr uint16_t CONFIG_SCHEMA = 3;
+    static constexpr uint16_t CONFIG_SCHEMA = 4;
 
     struct PersistentInverterV1 {
         uint32_t maxPvPowerW;
@@ -49,7 +56,7 @@ private:
         uint32_t crc;
     };
 
-    struct PersistentInverter {
+    struct PersistentInverterV3 {
         uint32_t maxPvPowerW;
         uint32_t inverterLimitW;
         uint8_t enabled;
@@ -70,8 +77,37 @@ private:
         uint8_t modbusQuantity;
         uint8_t verifyRetries;
         uint8_t dryRun;
-        PersistentInverter inverters[6];
+        PersistentInverterV3 inverters[6];
         uint32_t crc;
+    };
+
+    struct PersistentRecordV3 {
+        uint32_t magic;
+        uint32_t generation;
+        uint16_t schema;
+        uint16_t modbusRegister;
+        uint32_t debounceMs;
+        uint32_t modbusBaud;
+        uint32_t responseTimeoutMs;
+        uint32_t periodicVerifyMs;
+        uint8_t inputActiveHigh;
+        uint8_t modbusQuantity;
+        uint8_t verifyRetries;
+        uint8_t dryRun;
+        uint8_t rseProfile;
+        uint8_t reserved[3];
+        PersistentInverterV3 inverters[6];
+        uint32_t crc;
+    };
+
+    struct PersistentInverter {
+        uint32_t maxPvPowerW;
+        uint32_t inverterLimitW;
+        uint32_t rsePowerW[RSE_LEVEL_COUNT];
+        uint8_t enabled;
+        uint8_t ratingVerified;
+        uint8_t feedEnabledMask;
+        uint8_t reserved;
     };
 
     struct PersistentRecord {
@@ -96,11 +132,15 @@ private:
                   "legacy persistent inverter layout changed");
     static_assert(sizeof(PersistentRecordV1) == 84,
                   "legacy persistent configuration layout changed");
-    static_assert(sizeof(PersistentInverter) == 12,
-                  "persistent inverter layout changed");
+    static_assert(sizeof(PersistentInverterV3) == 12,
+                  "V3 persistent inverter layout changed");
     static_assert(sizeof(PersistentRecordV2) == 108,
                   "V2 persistent configuration layout changed");
-    static_assert(sizeof(PersistentRecord) == 112,
+    static_assert(sizeof(PersistentRecordV3) == 112,
+                  "V3 persistent configuration layout changed");
+    static_assert(sizeof(PersistentInverter) == 28,
+                  "persistent inverter layout changed");
+    static_assert(sizeof(PersistentRecord) == 208,
                   "persistent configuration layout changed");
 
     int8_t activeConfigSlot_ = -1;
@@ -135,6 +175,12 @@ private:
                                    offsetof(PersistentRecordV2, crc));
     }
 
+    static bool validRecord(const PersistentRecordV3& record) {
+        return record.magic == CONFIG_MAGIC && record.schema == 3 &&
+               record.crc == crc32(reinterpret_cast<const uint8_t*>(&record),
+                                   offsetof(PersistentRecordV3, crc));
+    }
+
     static bool readRecord(Preferences& p, const char* key,
                            PersistentRecord& record) {
         if (p.getBytesLength(key) != sizeof(record)) return false;
@@ -154,6 +200,24 @@ private:
         if (p.getBytesLength(key) != sizeof(record)) return false;
         return p.getBytes(key, &record, sizeof(record)) == sizeof(record) &&
                validRecord(record);
+    }
+
+    static bool readRecord(Preferences& p, const char* key,
+                           PersistentRecordV3& record) {
+        if (p.getBytesLength(key) != sizeof(record)) return false;
+        return p.getBytes(key, &record, sizeof(record)) == sizeof(record) &&
+               validRecord(record);
+    }
+
+    static void deriveRseTargets(InverterConfig& inverter) {
+        inverter.rsePowerW[RSE_LEVEL_100_INDEX] = calculateFeedInLimit(
+            inverter.maxPvPowerW, inverter.inverterLimitW, 100);
+        inverter.rsePowerW[RSE_LEVEL_60_INDEX] = calculateFeedInLimit(
+            inverter.maxPvPowerW, inverter.inverterLimitW, 60);
+        inverter.rsePowerW[RSE_LEVEL_30_INDEX] = calculateFeedInLimit(
+            inverter.maxPvPowerW, inverter.inverterLimitW, 30);
+        inverter.rsePowerW[RSE_LEVEL_0_INDEX] = 0;
+        inverter.feedEnabledMask = 0x0F;
     }
 
     static bool generationIsNewer(uint32_t left, uint32_t right) {
@@ -178,9 +242,12 @@ private:
         for (uint8_t i = 0; i < 6; ++i) {
             record.inverters[i].maxPvPowerW = inverters[i].maxPvPowerW;
             record.inverters[i].inverterLimitW = inverters[i].inverterLimitW;
+            for (uint8_t level = 0; level < RSE_LEVEL_COUNT; ++level)
+                record.inverters[i].rsePowerW[level] = inverters[i].rsePowerW[level];
             record.inverters[i].enabled = inverters[i].enabled ? 1 : 0;
             record.inverters[i].ratingVerified =
                 inverters[i].ratingVerified ? 1 : 0;
+            record.inverters[i].feedEnabledMask = inverters[i].feedEnabledMask;
         }
         record.crc = crc32(reinterpret_cast<const uint8_t*>(&record),
                            offsetof(PersistentRecord, crc));
@@ -202,8 +269,31 @@ private:
             inverters[i].enabled = record.inverters[i].enabled != 0;
             inverters[i].maxPvPowerW = record.inverters[i].maxPvPowerW;
             inverters[i].inverterLimitW = record.inverters[i].inverterLimitW;
+            for (uint8_t level = 0; level < RSE_LEVEL_COUNT; ++level)
+                inverters[i].rsePowerW[level] = record.inverters[i].rsePowerW[level];
+            inverters[i].feedEnabledMask = record.inverters[i].feedEnabledMask;
             inverters[i].ratingVerified =
                 record.inverters[i].ratingVerified != 0;
+        }
+    }
+
+    void applyRecord(const PersistentRecordV3& record) {
+        inputActiveHigh = record.inputActiveHigh != 0;
+        debounceMs = record.debounceMs;
+        modbusBaud = record.modbusBaud;
+        modbusRegister = record.modbusRegister;
+        modbusQuantity = record.modbusQuantity;
+        responseTimeoutMs = record.responseTimeoutMs;
+        verifyRetries = record.verifyRetries;
+        dryRun = record.dryRun != 0;
+        periodicVerifyMs = record.periodicVerifyMs;
+        rseProfile = static_cast<RseProfile>(record.rseProfile);
+        for (uint8_t i = 0; i < 6; ++i) {
+            inverters[i].enabled = record.inverters[i].enabled != 0;
+            inverters[i].maxPvPowerW = record.inverters[i].maxPvPowerW;
+            inverters[i].inverterLimitW = record.inverters[i].inverterLimitW;
+            inverters[i].ratingVerified = record.inverters[i].ratingVerified != 0;
+            deriveRseTargets(inverters[i]);
         }
     }
 
@@ -225,6 +315,7 @@ private:
             inverters[i].inverterLimitW = record.inverters[i].inverterLimitW;
             inverters[i].ratingVerified =
                 record.inverters[i].ratingVerified != 0;
+            deriveRseTargets(inverters[i]);
         }
     }
 
@@ -252,6 +343,7 @@ private:
             inverters[i].inverterLimitW = record.inverters[oldIndex].maxPvPowerW;
             inverters[i].ratingVerified =
                 record.inverters[oldIndex].ratingVerified != 0;
+            deriveRseTargets(inverters[i]);
         }
         inverters[5].ratingVerified = false;
     }
@@ -282,6 +374,7 @@ public:
             inverters[i].enabled = INVERTER_DEFAULTS[i].enabled;
             inverters[i].maxPvPowerW = INVERTER_DEFAULTS[i].maxPvPowerW;
             inverters[i].inverterLimitW = INVERTER_DEFAULTS[i].maxPvPowerW;
+            deriveRseTargets(inverters[i]);
         }
     }
 
@@ -314,6 +407,7 @@ public:
         migratedV2.applyRecord(previous);
         if (migratedV2.inverters[0].maxPvPowerW != 12345 ||
             migratedV2.inverters[0].inverterLimitW != 10000 ||
+            migratedV2.inverters[0].rsePowerW[RSE_LEVEL_60_INDEX] != 7407 ||
             migratedV2.rseProfile != RseProfile::StrictOneHot4) return false;
         return generationIsNewer(8, 7) &&
                generationIsNewer(0, 0xFFFFFFFFUL) &&
@@ -340,6 +434,26 @@ public:
             }
             p.end();
             sanitize();
+            return;
+        }
+
+        // V1.0.6/V1.0.7 used schema 3. Preserve all settings and derive the
+        // new editable per-level targets from the exact legacy calculation.
+        PersistentRecordV3 v3Slot0 {};
+        PersistentRecordV3 v3Slot1 {};
+        const bool v3Valid0 = readRecord(p, "cfg0", v3Slot0);
+        const bool v3Valid1 = readRecord(p, "cfg1", v3Slot1);
+        if (v3Valid0 || v3Valid1) {
+            const PersistentRecordV3& selected =
+                v3Valid1 && (!v3Valid0 || generationIsNewer(
+                    v3Slot1.generation, v3Slot0.generation))
+                    ? v3Slot1 : v3Slot0;
+            applyRecord(selected);
+            activeConfigSlot_ = (&selected == &v3Slot1) ? 1 : 0;
+            configGeneration_ = selected.generation;
+            p.end();
+            sanitize();
+            save();
             return;
         }
 
@@ -412,6 +526,7 @@ public:
             inverters[i].ratingVerified = p.isKey(verifiedKey.c_str())
                 ? p.getBool(verifiedKey.c_str(), false)
                 : inverters[i].enabled;
+            deriveRseTargets(inverters[i]);
         }
         p.end();
         sanitize();
@@ -496,6 +611,12 @@ public:
             if (modbusQuantity == 1 && inverter.inverterLimitW > 65535UL) {
                 inverter.enabled = false;
                 inverter.ratingVerified = false;
+            }
+            inverter.feedEnabledMask &= 0x0F;
+            if (inverter.ratingVerified) {
+                for (uint8_t level = 0; level < RSE_LEVEL_COUNT; ++level)
+                    if (inverter.rsePowerW[level] > inverter.inverterLimitW)
+                        inverter.rsePowerW[level] = inverter.inverterLimitW;
             }
         }
     }

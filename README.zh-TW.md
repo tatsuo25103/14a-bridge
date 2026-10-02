@@ -13,7 +13,7 @@ StampPLC 讀取 RSE 的無電位繼電器接點，依每台逆變器的 PV 裝�
 > 認證，也不能取代當地電網營運商的書面要求、電氣驗收或併網許可。
 
 [下載最新版本](https://github.com/tatsuo25103/14a-bridge/releases/latest)
-· [V1.0.7 版本說明](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.7.zh-TW.md)
+· [V1.0.8 版本說明](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.8.zh-TW.md)
 · [完整技術文件（英文）](stamplc_14a_bridge/README.md)
 
 ## 1. 安裝
@@ -26,7 +26,7 @@ StampPLC 讀取 RSE 的無電位繼電器接點，依每台逆變器的 PV 裝�
 ### 1.2 安裝 Windows 程式
 
 1. 從 [GitHub Releases](https://github.com/tatsuo25103/14a-bridge/releases/latest)
-   下載 `14a_Bridge_Setup_V1.0.7.exe`。
+   下載 `14a_Bridge_Setup_V1.0.8.exe`。
 2. 執行安裝程式，可選擇建立桌面捷徑。
 3. 以 USB-C 連接 StampPLC。
 4. 啟動 **14a Bridge – USB Configurator**。
@@ -60,7 +60,7 @@ StampPLC RS485           逆變器 RS485
 
 ### 1.4 第一次裝機
 
-1. 新 StampPLC 在 **Settings** 按 **USB flash V1.0.7**，寫入 Bootloader、
+1. 新 StampPLC 在 **Settings** 按 **USB flash V1.0.8**，寫入 Bootloader、
    OTA 分割區及韌體；過程中不可斷電或拔除 USB。
 2. 按 **Read SmartPLC settings**。
 3. 選擇 RSE Profile；已驗證的 FSP 設備使用 RS485 `19200`、暫存器 `0x04E5`。
@@ -92,7 +92,7 @@ StampPLC RS485           逆變器 RS485
 | **Enable automatic OTA** | 啟用 StampPLC 排程韌體檢查。 |
 | **Save OTA time** | 設定每日 60 分鐘維護時窗的開始時間；預設 Europe/Berlin `01:00`。 |
 | **Sync clock from PC** | 用電腦校正 RTC；連網後每天也會以 NTP 校時。 |
-| **USB flash V1.0.7** | 寫入安裝包內的正式韌體，顯示進度並驗證寫入結果。 |
+| **USB flash V1.0.8** | 寫入安裝包內的正式韌體，顯示進度並驗證寫入結果。 |
 | **Check SmartPLC update** | 檢查簽章韌體；確定有新版時才詢問是否更新。 |
 
 ### 2.2 Commissioning
@@ -208,6 +208,8 @@ OTA 驗證成功後，上一個分割區會綁定其 ELF SHA-256。保持 B 未�
 
 ## 6. 版本
 
-V1.0.7 新增強化 OTA 回復、以 ELF SHA-256 綁定備份分割區、A+C 圓形倒數、
-回復安全條件，以及 OTA 狀態修正。舊版會繼續保留在
-[Releases](https://github.com/tatsuo25103/14a-bridge/releases)。
+V1.0.8 新增可個別修改的 100/60/30/0% 功率、每段獨立 **Feedin Enable**，
+以及有限次寫入／回讀驗證。正常運作時，只有確認 `0x0007` 狀態確實需要改變
+才會寫入。完整內容見
+[V1.0.8 版本說明](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.8.zh-TW.md)。
+舊版會繼續保留在 [Releases](https://github.com/tatsuo25103/14a-bridge/releases)。

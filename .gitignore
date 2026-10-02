@@ -9,3 +9,5 @@ tmp/
 .DS_Store
 .release-secrets/
 *ota_private*.pem
+/versions/*
+!/versions/README.md

@@ -283,7 +283,7 @@ OTA is disabled so the rejected version is not immediately reinstalled.
 | **Enable automatic OTA** | Enables the scheduled SmartPLC firmware check. The default maintenance window is 01:00-01:59 Europe/Berlin. |
 | **Save OTA time** | Changes the beginning of the daily 60-minute maintenance window. Keep it in a verified non-daylight period. |
 | **Sync clock from PC** | Sets the onboard RTC. Wi-Fi/NTP later synchronizes it automatically. |
-| **USB flash V1.0.7** | Installs the bundled bootloader, OTA partition layout and firmware, with progress and verification. |
+| **USB flash V1.0.8** | Installs the bundled bootloader, OTA partition layout and firmware, with progress and verification. |
 | **Check SmartPLC update** | Checks the signed SmartPLC firmware manifest. If a newer version exists, the GUI asks before installation. |
 
 ![Commissioning tab](stamplc_14a_bridge/docs/user_manual_assets/gui_commissioning.png)
@@ -329,6 +329,7 @@ list only the functions added, changed or corrected in that version so an
 installer can quickly identify the operational impact.
 
 See [all releases](https://github.com/tatsuo25103/14a-bridge/releases), the
+[V1.0.8 release notes](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.8.md), the
 [V1.0.7 release notes](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.7.md) and the
 [V1.0.6 release notes](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.6.md).
 

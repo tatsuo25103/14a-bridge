@@ -20,6 +20,10 @@ public:
     ModbusResult readRaw(uint8_t slave, uint16_t address, uint8_t quantity, uint32_t timeoutMs);
     ModbusResult writeAndVerify(uint8_t slave, uint16_t address, uint8_t quantity,
                                uint32_t value, uint32_t timeoutMs, uint8_t retries);
+    ModbusResult writeBitCommandAndVerify(uint8_t slave, uint16_t address,
+                                         uint16_t commandValue, uint16_t bitMask,
+                                         bool expectedSet, uint32_t timeoutMs,
+                                         uint8_t retries);
 
 private:
     HardwareSerial& serial_;

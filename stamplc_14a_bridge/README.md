@@ -63,7 +63,7 @@ address, data format, byte order, and write/readback behaviour before use.
 ## 1.2 Install the Windows application
 
 1. Open the [latest GitHub release](https://github.com/tatsuo25103/14a-bridge/releases).
-2. Download `14a_Bridge_Setup_V1.0.7.exe`.
+2. Download `14a_Bridge_Setup_V1.0.8.exe`.
 3. Run the installer and start **14a Bridge - USB Configurator**.
 4. Connect the StampPLC to the PC with a USB Type-C **data** cable.
 
@@ -132,7 +132,7 @@ firmware, or a device that must receive the current USB firmware package.
 
 1. Select its COM port.
 2. Open **SETTINGS**.
-3. Click **USB flash V1.0.7**.
+3. Click **USB flash V1.0.8**.
 4. Confirm the selected port.
 5. Keep USB power connected until the circular indicator reaches `100%` and
    the GUI reports `Complete & verified`.
@@ -273,7 +273,7 @@ capped.
 
 | Control | Function |
 |---|---|
-| **USB flash V1.0.7** | Installs the bundled firmware through USB and verifies the written flash. Intended for first installation, recovery, or migration to the OTA partition layout. Keep power connected. |
+| **USB flash V1.0.8** | Installs the bundled firmware through USB and verifies the written flash. Intended for first installation, recovery, or migration to the OTA partition layout. Keep power connected. |
 | **Check SmartPLC update** | Asks the SmartPLC to check GitHub. If a newer firmware is available, the GUI asks whether to install it. If none is available, no installation occurs. |
 | **Installed firmware** | Shows the version reported by the connected controller. |
 | **Circular progress indicator** | Shows preparation, write/download percentage, verification, completion, or failure. |
@@ -488,6 +488,21 @@ Maintainers must follow the [production release checklist](docs/RELEASE_PROCESS.
 ---
 
 # 4. Release history
+
+## V1.0.8 — Editable RSE targets and feed-in permission
+
+- Added four independently editable target powers for 100%, 60%, 30% and 0%.
+- Added a separate **Feedin Enable** setting for every RSE level.
+- Kept `0x04E5` power programming independent from the feed-in permission so
+  the configured power is still written and verified when feed-in is disabled.
+- Limited power write/readback verification to three attempts. After three
+  failures, the controller invokes the verified feed-in-disable fail-safe.
+- Reduced `0x0007` wear and operational risk by reading first and writing only
+  when the requested permission differs from the confirmed inverter state.
+- Migrated schema-1/2/3 configurations to schema 4 while preserving existing
+  inverter, Wi-Fi, RS485, RSE-profile and OTA settings.
+
+See [V1.0.8 release notes](docs/RELEASE_NOTES_V1.0.8.md).
 
 ## V1.0.7 — OTA rollback hardening and local recovery
 
