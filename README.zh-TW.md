@@ -13,7 +13,7 @@ StampPLC 讀取 RSE 的無電位繼電器接點，依每台逆變器的 PV 裝�
 > 認證，也不能取代當地電網營運商的書面要求、電氣驗收或併網許可。
 
 [下載最新版本](https://github.com/tatsuo25103/14a-bridge/releases/latest)
-· [V1.0.8 版本說明](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.8.zh-TW.md)
+· [V1.0.9 版本說明](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.9.zh-TW.md)
 · [完整技術文件（英文）](stamplc_14a_bridge/README.md)
 
 ## 1. 安裝
@@ -26,7 +26,7 @@ StampPLC 讀取 RSE 的無電位繼電器接點，依每台逆變器的 PV 裝�
 ### 1.2 安裝 Windows 程式
 
 1. 從 [GitHub Releases](https://github.com/tatsuo25103/14a-bridge/releases/latest)
-   下載 `14a_Bridge_Setup_V1.0.8.exe`。
+   下載 `14a_Bridge_Setup_V1.0.9.exe`。
 2. 執行安裝程式，可選擇建立桌面捷徑。
 3. 以 USB-C 連接 StampPLC。
 4. 啟動 **14a Bridge – USB Configurator**。
@@ -58,9 +58,36 @@ StampPLC RS485           逆變器 RS485
 5–36 V DC 輸入。接點定義與共地方式必須符合所選 RSE Profile 及電網營運商
 最新文件。
 
+#### V1.0.9 新增 PlexLog 接線
+
+PlexLog 與 SmartPLC 不可再並聯成同一條 P17 Bus 上的兩個 Master。V1.0.9
+改成兩段獨立 RS485：
+
+```mermaid
+flowchart LR
+    PLM["PlexLog 電表通訊埠"] --> M["電表 ID 1"]
+    PLI["PlexLog 逆變器通訊埠"] --> AD["自動方向 RS485/UART 模組"]
+    AD --> PC["StampPLC PORT.C\nGPIO4 RX / GPIO5 TX"]
+    SP["StampPLC PWR485"] --> P17["P17 Bus"]
+    P17 --> INV["逆變器 ID 2-7"]
+```
+
+| 接線 | 端子 |
+|---|---|
+| 模組 `RO` | PORT.C `GPIO4`／RX（白線） |
+| 模組 `DI` | PORT.C `GPIO5`／TX（黃線） |
+| 模組電源 | 依模組標示接 PORT.C 5 V 與 GND |
+| 模組 RS485 `A/B` | PlexLog 逆變器通訊埠 `A/B` |
+| StampPLC PWR485 `A/B/GND` | P17／逆變器 Bus `A/B/GND` |
+| PlexLog 電表通訊埠 | 維持直接連接電表 ID 1，**不可**接到 PORT.C |
+
+必須使用自動方向 RS485 模組，並完全移除 PlexLog 原本與 P17 Bus 的直接
+並聯接線。本設計沒有旁路 Relay；SmartPLC 斷電或 gateway 關閉時，PlexLog
+會如實顯示逆變器通訊中斷。
+
 ### 1.4 第一次裝機
 
-1. 新 StampPLC 在 **Settings** 按 **USB flash V1.0.8**，寫入 Bootloader、
+1. 新 StampPLC 在 **Settings** 按 **USB flash V1.0.9**，寫入 Bootloader、
    OTA 分割區及韌體；過程中不可斷電或拔除 USB。
 2. 按 **Read SmartPLC settings**。
 3. 選擇 RSE Profile；已驗證的 FSP 設備使用 RS485 `19200`、暫存器 `0x04E5`。
@@ -86,13 +113,14 @@ StampPLC RS485           逆變器 RS485
 | **First-time discovery** | 唯讀掃描 ID 2–7，暫時把找到的額定功率填入表格。 |
 | **Save inverter settings** | 保存啟用 ID、PV 基準、已驗證逆變器上限、RS485 與 RSE Profile；離線設備保留為 `PENDING`，不會取消設定。 |
 | **Read SmartPLC settings** | 重新讀取控制器內完整設定及狀態；修改前與保存後都應執行。 |
+| **Enable PlexLog gateway** | 啟用獨立 PORT.C 轉送，預設開啟；只有未透過 PORT.C 使用 PlexLog 時才關閉。 |
 | **Refresh PC Wi-Fi** | 更新電腦可取得的 Wi-Fi Profile；仍可手動輸入 SSID。 |
 | **Save connect** | 把 Wi-Fi 帳密保存到 StampPLC 並嘗試連線。 |
 | **Retry connection** | 不修改帳密，重新使用已保存的 Wi-Fi 設定。 |
 | **Enable automatic OTA** | 啟用 StampPLC 排程韌體檢查。 |
 | **Save OTA time** | 設定每日 60 分鐘維護時窗的開始時間；預設 Europe/Berlin `01:00`。 |
 | **Sync clock from PC** | 用電腦校正 RTC；連網後每天也會以 NTP 校時。 |
-| **USB flash V1.0.8** | 寫入安裝包內的正式韌體，顯示進度並驗證寫入結果。 |
+| **USB flash V1.0.9** | 寫入安裝包內的正式韌體，顯示進度並驗證寫入結果。 |
 | **Check SmartPLC update** | 檢查簽章韌體；確定有新版時才詢問是否更新。 |
 
 ### 2.2 Commissioning
@@ -208,8 +236,8 @@ OTA 驗證成功後，上一個分割區會綁定其 ELF SHA-256。保持 B 未�
 
 ## 6. 版本
 
-V1.0.8 新增可個別修改的 100/60/30/0% 功率、每段獨立 **Feedin Enable**，
-以及有限次寫入／回讀驗證。正常運作時，只有確認 `0x0007` 狀態確實需要改變
-才會寫入。完整內容見
-[V1.0.8 版本說明](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.8.zh-TW.md)。
+V1.0.9 新增透過 PORT.C 的獨立 PlexLog gateway、通訊優先權仲裁、精確唯讀
+快取及每台逆變器診斷，避免 PlexLog 與 SmartPLC 同時成為 P17 Bus Master。
+完整內容見
+[V1.0.9 版本說明](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.9.zh-TW.md)。
 舊版會繼續保留在 [Releases](https://github.com/tatsuo25103/14a-bridge/releases)。

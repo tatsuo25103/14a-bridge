@@ -63,7 +63,7 @@ address, data format, byte order, and write/readback behaviour before use.
 ## 1.2 Install the Windows application
 
 1. Open the [latest GitHub release](https://github.com/tatsuo25103/14a-bridge/releases).
-2. Download `14a_Bridge_Setup_V1.0.8.exe`.
+2. Download `14a_Bridge_Setup_V1.0.9.exe`.
 3. Run the installer and start **14a Bridge - USB Configurator**.
 4. Connect the StampPLC to the PC with a USB Type-C **data** cable.
 
@@ -112,6 +112,34 @@ The PWR485 power pin is connected to StampPLC `VIN` and therefore carries
 Do not connect the PWR485 power pin to the inverter unless its documentation
 explicitly requires that voltage.
 
+### PlexLog dual-RS485 wiring (V1.0.9 and later)
+
+PlexLog and SmartPLC must not remain as two masters in parallel on P17. Use
+two electrically separate buses:
+
+```mermaid
+flowchart LR
+    PLM["PlexLog meter port"] --> M["Meter ID 1"]
+    PLI["PlexLog inverter port"] --> AD["Automatic-direction\nRS485/UART adapter"]
+    AD --> PC["StampPLC PORT.C\nGPIO4 RX / GPIO5 TX"]
+    SP["StampPLC PWR485"] --> P17["P17 bus"]
+    P17 --> INV["Inverter IDs 2-7"]
+```
+
+| Connection | Terminal |
+|---|---|
+| Adapter `RO` | PORT.C `GPIO4` / UART2 RX (white) |
+| Adapter `DI` | PORT.C `GPIO5` / UART2 TX (yellow) |
+| Adapter power | PORT.C 5 V and GND, according to the adapter marking |
+| Adapter RS485 `A/B` | PlexLog inverter-port `A/B` |
+| StampPLC PWR485 `A/B/GND` | P17/inverter bus `A/B/GND` |
+| PlexLog meter port | Directly to meter ID 1; never to PORT.C |
+
+Use an automatic-direction RS485 adapter. Remove PlexLog's former direct
+parallel connection to P17 completely. Both segments use the configured P17
+baud rate and 8N1. No bypass relay is used: a powered-off SmartPLC or disabled
+gateway is intentionally visible to PlexLog as lost inverter communication.
+
 ## 1.4 Identify and connect the StampPLC
 
 1. Click **Scan**.
@@ -132,7 +160,7 @@ firmware, or a device that must receive the current USB firmware package.
 
 1. Select its COM port.
 2. Open **SETTINGS**.
-3. Click **USB flash V1.0.8**.
+3. Click **USB flash V1.0.9**.
 4. Confirm the selected port.
 5. Keep USB power connected until the circular indicator reaches `100%` and
    the GUI reports `Complete & verified`.
@@ -249,6 +277,7 @@ continues even when the GUI is closed or USB is disconnected.
 | **First-time discovery** | Read-only scan of IDs 2-7. It presets detected full-power values in the table but does not save them. Use only at LIVE 100% or before the RSE is installed, with all inverters at full power. |
 | **Save inverter settings** | Validates the table, saves enabled IDs, PV power, verified inverter maximum, RS485 settings, and RSE profile to StampPLC NVS. Online units are verified using bounded Modbus write/readback; offline or unsafe rows remain `PENDING` instead of being discarded. |
 | **Read SmartPLC settings** | Reloads the complete saved inverter, RS485, RSE profile, Wi-Fi, clock, firmware, and OTA state from the connected controller. Use this before editing and again after saving. |
+| **Enable PlexLog gateway** | Enables the separate PORT.C proxy. Schema-5 migration enables it by default. Disable it only when PlexLog is not connected through PORT.C. |
 
 The installed PV power may legitimately exceed the inverter rating. The GUI
 keeps that value and marks the cell with a yellow warning. It does not force
@@ -273,7 +302,7 @@ capped.
 
 | Control | Function |
 |---|---|
-| **USB flash V1.0.8** | Installs the bundled firmware through USB and verifies the written flash. Intended for first installation, recovery, or migration to the OTA partition layout. Keep power connected. |
+| **USB flash V1.0.9** | Installs the bundled firmware through USB and verifies the written flash. Intended for first installation, recovery, or migration to the OTA partition layout. Keep power connected. |
 | **Check SmartPLC update** | Asks the SmartPLC to check GitHub. If a newer firmware is available, the GUI asks whether to install it. If none is available, no installation occurs. |
 | **Installed firmware** | Shows the version reported by the connected controller. |
 | **Circular progress indicator** | Shows preparation, write/download percentage, verification, completion, or failure. |
@@ -488,6 +517,23 @@ Maintainers must follow the [production release checklist](docs/RELEASE_PROCESS.
 ---
 
 # 4. Release history
+
+## V1.0.9 — Separate PlexLog gateway and collision-free arbitration
+
+- Added a separate PORT.C upstream RS485 gateway so PlexLog and SmartPLC no
+  longer share P17 as competing masters.
+- Added steady-state PlexLog priority, RSE-transition SmartPLC priority,
+  bounded exact-read caching and per-inverter diagnostics.
+- Restricted forwarding to valid inverter IDs 2-7; meter ID 1, broadcasts and
+  unsupported frames never reach P17.
+- Shortened the normal verified power-write path without increasing writes;
+  a slower inverter receives a second read-only check before any retry.
+- Migrated previous configurations to schema 5 without changing inverter,
+  RSE, RS485, Wi-Fi or OTA settings.
+- Passed two deliberate collision rounds with 100/100 PlexLog requests
+  answered and 10/10 inverter writes/readbacks verified.
+
+See [V1.0.9 release notes](docs/RELEASE_NOTES_V1.0.9.md).
 
 ## V1.0.8 — Editable RSE targets and feed-in permission
 

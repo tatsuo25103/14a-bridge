@@ -1,6 +1,6 @@
 # 14A Bridge 快速安裝與調適指南
 
-> 適用：SmartPLC 韌體 `V1.0.6`、Windows USB Configurator `V1.0.6`
+> 適用：SmartPLC 韌體 `V1.0.9`、Windows USB Configurator `V1.0.9`
 
 照順序完成以下 7 個步驟，即可把 RSE 的 `100% / 60% / 30% / 0%` 指令送到最多 6 台逆變器。
 
@@ -21,7 +21,13 @@
 
 RS485：`A → A/D+`、`B → B/D−`。PWR485 的 `VIN` 不要接逆變器。
 
-**成功：** StampPLC 開機並顯示 `V1.0.6`。
+有 PlexLog 時，必須移除 PlexLog 與 P17 原本的直接並聯。PlexLog 電表通訊埠
+維持直接接電表 ID 1；逆變器通訊埠經由**自動方向 RS485/UART 模組**接
+StampPLC PORT.C：模組 `RO → GPIO4/RX`（白線）、`DI → GPIO5/TX`（黃線），
+並依模組標示接 5 V/GND。StampPLC PWR485 是 P17／逆變器 ID 2–7 唯一的
+Master 接線。
+
+**成功：** StampPLC 開機並顯示 `V1.0.9`。
 
 ## 2. USB 連線
 
@@ -31,7 +37,7 @@ RS485：`A → A/D+`、`B → B/D−`。PWR485 的 `VIN` 不要接逆變器。
 4. 按 **Connect**。
 5. 按 **Read SmartPLC settings**。
 
-**成功：** GUI 先顯示偵測到的 `[SMARTPLC] COMx V1.0.6`，連線後顯示 `CONNECTED COMx`。
+**成功：** GUI 先顯示偵測到的 `[SMARTPLC] COMx V1.0.9`，連線後顯示 `CONNECTED COMx`。
 
 ## 3. 掃描逆變器
 

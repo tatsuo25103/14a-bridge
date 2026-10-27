@@ -17,7 +17,7 @@ FC03-Rücklesen. Unveränderte Sollwerte werden nicht ständig neu geschrieben.
 > Vorgaben des Netzbetreibers noch Abnahme oder Zertifizierung.
 
 [Neueste Version herunterladen](https://github.com/tatsuo25103/14a-bridge/releases/latest)
-· [V1.0.8 Versionshinweise](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.8.de.md)
+· [V1.0.9 Versionshinweise](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.9.de.md)
 · [Ausführliche technische Referenz](stamplc_14a_bridge/README.md)
 
 ## 1. Installation
@@ -29,7 +29,7 @@ FC03-Rücklesen. Unveränderte Sollwerte werden nicht ständig neu geschrieben.
 
 ### 1.2 Windows-Anwendung installieren
 
-1. `14a_Bridge_Setup_V1.0.8.exe` aus den
+1. `14a_Bridge_Setup_V1.0.9.exe` aus den
    [GitHub Releases](https://github.com/tatsuo25103/14a-bridge/releases/latest)
    laden.
 2. Setup starten und optional die Desktop-Verknüpfung anlegen.
@@ -65,9 +65,37 @@ Nur **potenzialfreie** RSE-Kontakte direkt anschließen. Niemals geschaltete
 müssen dem ausgewählten RSE-Profil und den aktuellen Netzbetreiberunterlagen
 entsprechen.
 
+#### Zusätzliche PlexLog-Verdrahtung ab V1.0.9
+
+PlexLog und SmartPLC dürfen **nicht parallel als zwei Master** am P17-Bus
+liegen. V1.0.9 verwendet deshalb zwei getrennte RS485-Segmente:
+
+```mermaid
+flowchart LR
+    PLM["PlexLog Zählerport"] --> M["Zähler ID 1"]
+    PLI["PlexLog Wechselrichterport"] --> AD["RS485/UART-Wandler\nautomatische Richtung"]
+    AD --> PC["StampPLC PORT.C\nGPIO4 RX / GPIO5 TX"]
+    SP["StampPLC PWR485"] --> P17["P17-Bus"]
+    P17 --> INV["Wechselrichter IDs 2-7"]
+```
+
+| Verbindung | Anschluss |
+|---|---|
+| Wandler `RO` | PORT.C `GPIO4` / RX (weiß) |
+| Wandler `DI` | PORT.C `GPIO5` / TX (gelb) |
+| Wandler Versorgung | PORT.C 5 V und GND entsprechend der Wandlerbeschriftung |
+| Wandler RS485 `A/B` | PlexLog-Wechselrichterport `A/B` |
+| StampPLC PWR485 `A/B/GND` | P17-/Wechselrichterbus `A/B/GND` |
+| PlexLog-Zählerport | direkt zum Zähler ID 1; **nicht** an PORT.C |
+
+Es ist ein RS485-Wandler mit automatischer Richtungsumschaltung erforderlich.
+Die direkte PlexLog-Verbindung zum P17-Bus ist vollständig zu entfernen. Es
+gibt kein Bypass-Relais: Bei stromloser StampPLC oder abgeschaltetem Gateway
+zeigt PlexLog die Wechselrichterkommunikation als unterbrochen an.
+
 ### 1.4 Erstinbetriebnahme
 
-1. Bei neuer StampPLC unter **Settings** mit **USB flash V1.0.8** Bootloader,
+1. Bei neuer StampPLC unter **Settings** mit **USB flash V1.0.9** Bootloader,
    OTA-Partitionen und Firmware installieren. Versorgung nicht unterbrechen.
 2. **Read SmartPLC settings** ausführen.
 3. RSE-Profil und RS485 (`19200`, Register `0x04E5` für die geprüften
@@ -95,13 +123,14 @@ ist lesend und speichert erst nach ausdrücklichem **Save inverter settings**.
 | **First-time discovery** | Lesender Scan der IDs 2–7; übernimmt gefundene Nennwerte vorläufig in die Tabelle. |
 | **Save inverter settings** | Speichert IDs, PV-Bezugsleistung, geprüfte Wechselrichtergrenze, RS485 und RSE-Profil. Offline-Geräte bleiben `PENDING`; Eingaben gehen nicht verloren. |
 | **Read SmartPLC settings** | Liest die vollständige gespeicherte Konfiguration und den Status neu ein. |
+| **Enable PlexLog gateway** | Aktiviert die getrennte PORT.C-Weiterleitung. Standardmäßig aktiv; nur abschalten, wenn PlexLog nicht über PORT.C geführt wird. |
 | **Refresh PC Wi-Fi** | Aktualisiert die unter Windows verfügbaren WLAN-Profile. Manuelle SSID-Eingabe bleibt möglich. |
 | **Save connect** | Speichert WLAN-Zugangsdaten in der StampPLC und verbindet. |
 | **Retry connection** | Verwendet die gespeicherten Zugangsdaten erneut. |
 | **Enable automatic OTA** | Aktiviert die geplante Firmwareprüfung der StampPLC. |
 | **Save OTA time** | Setzt den Beginn des täglichen 60-Minuten-Wartungsfensters; Standard `01:00` Europe/Berlin. |
 | **Sync clock from PC** | Stellt die RTC; bei WLAN erfolgt zusätzlich tägliche NTP-Synchronisation. |
-| **USB flash V1.0.8** | Installiert das mitgelieferte Firmwarepaket mit Fortschritt und Schreibprüfung. |
+| **USB flash V1.0.9** | Installiert das mitgelieferte Firmwarepaket mit Fortschritt und Schreibprüfung. |
 | **Check SmartPLC update** | Prüft signierte SmartPLC-Updates; bei neuer Version folgt eine Bestätigungsfrage. |
 
 ### 2.2 Commissioning
@@ -228,10 +257,10 @@ allein ist keine elektrische Abnahme oder rechtliche Zertifizierung.
 
 ## 6. Versionen
 
-V1.0.8 ergänzt vier frei editierbare Leistungswerte für 100/60/30/0 %, eine
-separate **Feedin Enable**-Freigabe je Stufe sowie begrenzte Schreib-/
-Rückleseprüfung. Register `0x0007` wird im Normalbetrieb nur bei einer wirklich
-erforderlichen Zustandsänderung geschrieben. Details stehen in den
-[V1.0.8 Versionshinweisen](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.8.de.md).
+V1.0.9 ergänzt das getrennte PlexLog-Gateway über PORT.C, priorisierte
+Bus-Arbitrierung, exakte Lese-Caches und Diagnose je Wechselrichter. PlexLog
+und SmartPLC arbeiten dadurch nicht mehr als zwei Master auf demselben
+P17-Bus. Details stehen in den
+[V1.0.9 Versionshinweisen](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.9.de.md).
 Frühere Versionen bleiben auf der
 [Release-Seite](https://github.com/tatsuo25103/14a-bridge/releases) verfügbar.

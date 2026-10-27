@@ -30,7 +30,7 @@ struct InverterConfig {
 struct AppConfig {
 private:
     static constexpr uint32_t CONFIG_MAGIC = 0x41313442UL;  // "A14B"
-    static constexpr uint16_t CONFIG_SCHEMA = 4;
+    static constexpr uint16_t CONFIG_SCHEMA = 5;
 
     struct PersistentInverterV1 {
         uint32_t maxPvPowerW;
@@ -110,7 +110,7 @@ private:
         uint8_t reserved;
     };
 
-    struct PersistentRecord {
+    struct PersistentRecordV4 {
         uint32_t magic;
         uint32_t generation;
         uint16_t schema;
@@ -128,6 +128,26 @@ private:
         PersistentInverter inverters[6];
         uint32_t crc;
     };
+
+    struct PersistentRecord {
+        uint32_t magic;
+        uint32_t generation;
+        uint16_t schema;
+        uint16_t modbusRegister;
+        uint32_t debounceMs;
+        uint32_t modbusBaud;
+        uint32_t responseTimeoutMs;
+        uint32_t periodicVerifyMs;
+        uint8_t inputActiveHigh;
+        uint8_t modbusQuantity;
+        uint8_t verifyRetries;
+        uint8_t dryRun;
+        uint8_t rseProfile;
+        uint8_t plexlogGatewayEnabled;
+        uint8_t reserved[2];
+        PersistentInverter inverters[6];
+        uint32_t crc;
+    };
     static_assert(sizeof(PersistentInverterV1) == 8,
                   "legacy persistent inverter layout changed");
     static_assert(sizeof(PersistentRecordV1) == 84,
@@ -140,6 +160,8 @@ private:
                   "V3 persistent configuration layout changed");
     static_assert(sizeof(PersistentInverter) == 28,
                   "persistent inverter layout changed");
+    static_assert(sizeof(PersistentRecordV4) == 208,
+                  "V4 persistent configuration layout changed");
     static_assert(sizeof(PersistentRecord) == 208,
                   "persistent configuration layout changed");
 
@@ -181,6 +203,12 @@ private:
                                    offsetof(PersistentRecordV3, crc));
     }
 
+    static bool validRecord(const PersistentRecordV4& record) {
+        return record.magic == CONFIG_MAGIC && record.schema == 4 &&
+               record.crc == crc32(reinterpret_cast<const uint8_t*>(&record),
+                                   offsetof(PersistentRecordV4, crc));
+    }
+
     static bool readRecord(Preferences& p, const char* key,
                            PersistentRecord& record) {
         if (p.getBytesLength(key) != sizeof(record)) return false;
@@ -204,6 +232,13 @@ private:
 
     static bool readRecord(Preferences& p, const char* key,
                            PersistentRecordV3& record) {
+        if (p.getBytesLength(key) != sizeof(record)) return false;
+        return p.getBytes(key, &record, sizeof(record)) == sizeof(record) &&
+               validRecord(record);
+    }
+
+    static bool readRecord(Preferences& p, const char* key,
+                           PersistentRecordV4& record) {
         if (p.getBytesLength(key) != sizeof(record)) return false;
         return p.getBytes(key, &record, sizeof(record)) == sizeof(record) &&
                validRecord(record);
@@ -239,6 +274,7 @@ private:
         record.verifyRetries = verifyRetries;
         record.dryRun = dryRun ? 1 : 0;
         record.rseProfile = static_cast<uint8_t>(rseProfile);
+        record.plexlogGatewayEnabled = plexlogGatewayEnabled ? 1 : 0;
         for (uint8_t i = 0; i < 6; ++i) {
             record.inverters[i].maxPvPowerW = inverters[i].maxPvPowerW;
             record.inverters[i].inverterLimitW = inverters[i].inverterLimitW;
@@ -265,6 +301,33 @@ private:
         dryRun = record.dryRun != 0;
         periodicVerifyMs = record.periodicVerifyMs;
         rseProfile = static_cast<RseProfile>(record.rseProfile);
+        plexlogGatewayEnabled = record.plexlogGatewayEnabled != 0;
+        for (uint8_t i = 0; i < 6; ++i) {
+            inverters[i].enabled = record.inverters[i].enabled != 0;
+            inverters[i].maxPvPowerW = record.inverters[i].maxPvPowerW;
+            inverters[i].inverterLimitW = record.inverters[i].inverterLimitW;
+            for (uint8_t level = 0; level < RSE_LEVEL_COUNT; ++level)
+                inverters[i].rsePowerW[level] = record.inverters[i].rsePowerW[level];
+            inverters[i].feedEnabledMask = record.inverters[i].feedEnabledMask;
+            inverters[i].ratingVerified =
+                record.inverters[i].ratingVerified != 0;
+        }
+    }
+
+    void applyRecord(const PersistentRecordV4& record) {
+        inputActiveHigh = record.inputActiveHigh != 0;
+        debounceMs = record.debounceMs;
+        modbusBaud = record.modbusBaud;
+        modbusRegister = record.modbusRegister;
+        modbusQuantity = record.modbusQuantity;
+        responseTimeoutMs = record.responseTimeoutMs;
+        verifyRetries = record.verifyRetries;
+        dryRun = record.dryRun != 0;
+        periodicVerifyMs = record.periodicVerifyMs;
+        rseProfile = static_cast<RseProfile>(record.rseProfile);
+        // The dual-port feature is new in schema 5 and intentionally defaults
+        // to enabled for every upgraded V1.0.8 installation.
+        plexlogGatewayEnabled = true;
         for (uint8_t i = 0; i < 6; ++i) {
             inverters[i].enabled = record.inverters[i].enabled != 0;
             inverters[i].maxPvPowerW = record.inverters[i].maxPvPowerW;
@@ -364,6 +427,7 @@ public:
     uint8_t modbusQuantity = 2;
     uint32_t responseTimeoutMs = 1200;
     uint8_t verifyRetries = 3;
+    bool plexlogGatewayEnabled = true;
 
     // Safe commissioning default: observe and log, but do not control outputs.
     bool dryRun = true;
@@ -384,6 +448,12 @@ public:
         if (!validRecord(record)) return false;
         record.inverters[2].maxPvPowerW ^= 1U;
         if (validRecord(record)) return false;
+        PersistentRecordV4 v4 {};
+        v4.schema = 4;
+        AppConfig migratedV4;
+        migratedV4.plexlogGatewayEnabled = false;
+        migratedV4.applyRecord(v4);
+        if (!migratedV4.plexlogGatewayEnabled) return false;
         PersistentRecordV1 legacy {};
         legacy.inverters[0].maxPvPowerW = 1111;  // old ID1, must be dropped
         legacy.inverters[1].maxPvPowerW = 2222;  // old ID2
@@ -434,6 +504,26 @@ public:
             }
             p.end();
             sanitize();
+            return;
+        }
+
+        // V1.0.8 used schema 4.  Preserve all RSE and inverter values and
+        // enable the new PlexLog gateway by default.
+        PersistentRecordV4 v4Slot0 {};
+        PersistentRecordV4 v4Slot1 {};
+        const bool v4Valid0 = readRecord(p, "cfg0", v4Slot0);
+        const bool v4Valid1 = readRecord(p, "cfg1", v4Slot1);
+        if (v4Valid0 || v4Valid1) {
+            const PersistentRecordV4& selected =
+                v4Valid1 && (!v4Valid0 || generationIsNewer(
+                    v4Slot1.generation, v4Slot0.generation))
+                    ? v4Slot1 : v4Slot0;
+            applyRecord(selected);
+            activeConfigSlot_ = (&selected == &v4Slot1) ? 1 : 0;
+            configGeneration_ = selected.generation;
+            p.end();
+            sanitize();
+            save();
             return;
         }
 

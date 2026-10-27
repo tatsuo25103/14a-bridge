@@ -16,6 +16,7 @@
 #include "EventLog.h"
 #include "ModbusRtuMaster.h"
 #include "OtaManager.h"
+#include "PlexLogGateway.h"
 
 #ifndef CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
 #error "Production OTA requires ESP32 bootloader application rollback support"
@@ -25,6 +26,8 @@ namespace {
 constexpr int8_t RS485_TX = 0;
 constexpr int8_t RS485_RX = 39;
 constexpr int8_t RS485_DIR = 46;
+constexpr int8_t PLEXLOG_RX = 4;
+constexpr int8_t PLEXLOG_TX = 5;
 constexpr uint8_t INVERTER_COUNT = 6;
 constexpr uint8_t FIRST_INVERTER_ID = 2;
 constexpr uint8_t LAST_INVERTER_ID =
@@ -51,10 +54,15 @@ constexpr uint16_t FEED_PERMISSION_REGISTER = 0x0007;
 constexpr uint16_t FEED_PERMISSION_BIT = 0x2000;
 constexpr uint16_t FEED_PERMISSION_ENABLE_COMMAND = 0x2000;
 constexpr uint16_t FEED_PERMISSION_DISABLE_COMMAND = 0xDFFF;
+constexpr uint32_t PLEXLOG_BACKGROUND_QUIET_MS = 120;
+constexpr uint32_t PLEXLOG_FORWARD_TIMEOUT_MAX_MS = 450;
 
 AppConfig config;
 HardwareSerial rs485(1);
 ModbusRtuMaster modbus(rs485, RS485_RX, RS485_TX, RS485_DIR);
+HardwareSerial plexlogRs485(2);
+PlexLogGateway plexlogGateway(
+    plexlogRs485, modbus, PLEXLOG_RX, PLEXLOG_TX);
 EventLog eventLog;
 
 String usbLine;
@@ -110,6 +118,11 @@ void startInverterControl();
 void returnToPhysicalRse(const String& reason);
 bool safeForFirmwareUpdate();
 void serviceManualRollbackGesture();
+
+uint32_t plexlogForwardTimeoutMs() {
+    return min<uint32_t>(config.responseTimeoutMs,
+                         PLEXLOG_FORWARD_TIMEOUT_MAX_MS);
+}
 
 const char* rseProfileText(RseProfile profile) {
     switch (profile) {
@@ -558,6 +571,8 @@ ModbusResult setFeedPermission(uint8_t index, bool enabled, uint8_t retries,
     ModbusResult current = modbus.readRaw(
         slaveId, FEED_PERMISSION_REGISTER, 1, config.responseTimeoutMs);
     if (current.ok) {
+        plexlogGateway.publishVerifiedHolding(
+            slaveId, FEED_PERMISSION_REGISTER, 1, current.value);
         inverterFeedStateKnown[index] = true;
         inverterFeedEnabled[index] = (current.value & FEED_PERMISSION_BIT) != 0;
         if (inverterFeedEnabled[index] == enabled) {
@@ -579,6 +594,8 @@ ModbusResult setFeedPermission(uint8_t index, bool enabled, uint8_t retries,
         enabled ? FEED_PERMISSION_ENABLE_COMMAND : FEED_PERMISSION_DISABLE_COMMAND,
         FEED_PERMISSION_BIT, enabled, config.responseTimeoutMs, retries);
     if (result.ok) {
+        plexlogGateway.publishVerifiedHolding(
+            slaveId, FEED_PERMISSION_REGISTER, 1, result.value);
         inverterFeedStateKnown[index] = true;
         inverterFeedEnabled[index] = enabled;
     }
@@ -634,6 +651,10 @@ bool applyLevel(uint8_t percent, const String& reason) {
     applyTotal = enabledCount;
     lastResult = "Applying RSE " + String(percent) + "%";
     updateDisplay(true);
+    // While RSE owns the downstream bus, PlexLog may use a longer exact-read
+    // cache window.  Verified 0x04E5/0x0007 values are published immediately,
+    // so control-related replies never retain the pre-transition value.
+    plexlogGateway.setControlBusy(!config.dryRun && enabledCount > 0);
     modbus.begin(config.modbusBaud);
 
     for (uint8_t i = 0; i < INVERTER_COUNT; ++i) {
@@ -651,6 +672,7 @@ bool applyLevel(uint8_t percent, const String& reason) {
         const bool requestedFeedEnabled =
             feedEnabledForPercent(config.inverters[i], percent);
         lastRequested[i] = requested;
+        bool plexlogSlotServed = false;
 
         String detail;
         if (config.dryRun) {
@@ -688,6 +710,17 @@ bool applyLevel(uint8_t percent, const String& reason) {
                     requested, config.responseTimeoutMs, config.verifyRetries);
                 detail = result.detail;
             }
+            if (feedOk && result.ok) {
+                // Publish the newly verified limit before the feed-state read.
+                // A coincident exact PlexLog request can now be rescued from
+                // the queue without another P17 transaction.  At most one
+                // bounded PlexLog slot is allowed per controlled inverter.
+                plexlogGateway.publishVerifiedHolding(
+                    slaveId, config.modbusRegister,
+                    config.modbusQuantity, result.value);
+                plexlogSlotServed = plexlogGateway.serviceOneQueued(
+                    plexlogForwardTimeoutMs());
+            }
             if (feedOk && !result.ok) {
                 const ModbusResult failSafe = setFeedPermission(
                     i, false, config.verifyRetries, true);
@@ -722,6 +755,11 @@ bool applyLevel(uint8_t percent, const String& reason) {
         eventLog.append(timestampNow(), reason, stableRseMask, percent,
                         slaveId, config.inverters[i].maxPvPowerW,
                         requested, lastReadback[i], detail);
+        // RSE owns the downstream bus, but it releases a bounded service slot
+        // between inverters.  Requests already answered from the short cache
+        // are never queued; a cache miss gets one live opportunity here.
+        if (!plexlogSlotServed)
+            plexlogGateway.serviceOneQueued(plexlogForwardTimeoutMs());
         // Keep the RS485 quiet between different devices, but do not add an
         // unnecessary final half-second pause after the last transaction.
         bool hasNextEnabled = false;
@@ -742,6 +780,7 @@ bool applyLevel(uint8_t percent, const String& reason) {
     outputHealthy = !superseded && configuredCount > 0 &&
                     pendingCount == 0 && enabledCount == configuredCount && allOk;
     applyInProgress = false;
+    plexlogGateway.setControlBusy(false);
     if (superseded) {
         // The old batch may have updated only some IDs. Force a complete pass
         // for whichever physical RSE state is stable when control returns to
@@ -943,6 +982,12 @@ void pollNextEnabledInverter() {
     for (uint8_t i = 0; i < INVERTER_COUNT; ++i)
         if (controlEnabled(i)) ++enabledCount;
     if (enabledCount == 0) return;
+    // PlexLog is the normal-operation priority.  Background health reads are
+    // opportunistic and start only in a measured upstream gap.  If a PlexLog
+    // request arrives while this read is in flight, the independent UART can
+    // still answer an exact recent read from cache or queue it briefly.
+    if (plexlogGateway.enabled() &&
+        !plexlogGateway.upstreamQuietFor(PLEXLOG_BACKGROUND_QUIET_MS)) return;
     const uint32_t slotMs = max<uint32_t>(
         PERIODIC_READ_SLOT_MS, config.periodicVerifyMs / enabledCount);
     if (!elapsedAtLeast(millis(), lastPeriodicReadAt, slotMs)) return;
@@ -962,6 +1007,9 @@ void pollNextEnabledInverter() {
             config.responseTimeoutMs);
         ModbusResult verificationResult = result;
         if (result.ok && !config.dryRun && activePercent >= 0) {
+            plexlogGateway.publishVerifiedHolding(
+                slaveIdForIndex(index), config.modbusRegister,
+                config.modbusQuantity, result.value);
             const uint32_t expected = wattsForPercent(
                 config.inverters[index], static_cast<uint8_t>(activePercent));
             const bool expectedFeed = feedEnabledForPercent(
@@ -970,6 +1018,9 @@ void pollNextEnabledInverter() {
                 slaveIdForIndex(index), FEED_PERMISSION_REGISTER, 1,
                 config.responseTimeoutMs);
             if (feedResult.ok) {
+                plexlogGateway.publishVerifiedHolding(
+                    slaveIdForIndex(index), FEED_PERMISSION_REGISTER,
+                    1, feedResult.value);
                 inverterFeedStateKnown[index] = true;
                 inverterFeedEnabled[index] =
                     (feedResult.value & FEED_PERMISSION_BIT) != 0;
@@ -1029,6 +1080,7 @@ void printHelp() {
     Serial.println("  apply                         Reapply current RSE level in dry-run");
     Serial.println("  apply CONFIRM                 Reapply current RSE level when live");
     Serial.println("  baud <rate>                  Set RS485 baud rate");
+    Serial.println("  plexlog <on|off>             Enable/disable the PORT.C PlexLog gateway");
     Serial.println("  reg <hex|decimal>             Set power-limit register");
     Serial.println("  rse profile <name> CONFIRM    strict, westnetz, ewe, or fnn");
     Serial.println("  wifi show                     Show Wi-Fi and OTA state");
@@ -1088,6 +1140,7 @@ void printStatus() {
                   controlModeText(),
                   config.modbusBaud, config.modbusRegister,
                   config.modbusQuantity);
+    plexlogGateway.printStatus(Serial);
     Serial.printf("Firmware: %s  WiFi saved: %s connected: %s auto OTA: %s IP: %s RSSI: %ld\r\n",
                   APP_VERSION, otaManager.hasCredentials() ? "yes" : "no",
                   otaManager.connected() ? "yes" : "no",
@@ -1149,6 +1202,8 @@ void printGuiStatus() {
     Serial.printf("@ Mode: %s  RS485: %lu baud  register: 0x%04X  quantity: %u\r\n",
                   controlModeText(), config.modbusBaud,
                   config.modbusRegister, config.modbusQuantity);
+    Serial.print("@ ");
+    plexlogGateway.printStatus(Serial);
     Serial.printf("@ WIFI VERSION=%s SAVED=%s CONNECTED=%s AUTO=%s SSIDHEX=%s IP=%s RSSI=%ld\r\n",
                   APP_VERSION, otaManager.hasCredentials() ? "yes" : "no",
                   otaManager.connected() ? "yes" : "no",
@@ -1219,6 +1274,25 @@ void processUsbCommand(String line) {
     }
     if (line.equalsIgnoreCase("gui")) {
         printGuiStatus();
+        return;
+    }
+
+    if (line.equalsIgnoreCase("plexlog on") ||
+        line.equalsIgnoreCase("plexlog off")) {
+        const bool requested = line.equalsIgnoreCase("plexlog on");
+        const bool previous = config.plexlogGatewayEnabled;
+        config.plexlogGatewayEnabled = requested;
+        if (!saveConfig()) {
+            config.plexlogGatewayEnabled = previous;
+            Serial.printf("PLEXLOG CONFIG STATUS=ERROR ENABLED=%s DETAIL=configuration save failed; previous setting kept\r\n",
+                          previous ? "yes" : "no");
+            return;
+        }
+        if (requested) plexlogGateway.begin(config.modbusBaud);
+        else plexlogGateway.end();
+        Serial.printf("PLEXLOG CONFIG STATUS=OK ENABLED=%s DETAIL=saved\r\n",
+                      requested ? "yes" : "no");
+        plexlogGateway.printStatus(Serial);
         return;
     }
 
@@ -1740,6 +1814,11 @@ void processUsbCommand(String line) {
         const uint32_t previous = config.modbusBaud;
         config.modbusBaud = baud;
         if (!saveConfig()) config.modbusBaud = previous;
+        modbus.begin(config.modbusBaud);
+        if (config.plexlogGatewayEnabled)
+            plexlogGateway.begin(config.modbusBaud);
+        else
+            plexlogGateway.end();
         return;
     }
 
@@ -2406,6 +2485,10 @@ void serviceTimeCriticalInputs() {
             rawChangedAt = now;
         }
     }
+    // This callback also runs inside downstream Modbus waits.  Never start a
+    // nested downstream transaction here; only collect PlexLog requests and
+    // use a recent exact read cache entry when one is available.
+    plexlogGateway.service(false, plexlogForwardTimeoutMs());
     updateDisplay();
 }
 }  // namespace
@@ -2425,6 +2508,10 @@ void setup() {
     boardConfig.enableSdCard = true;
     M5StamPLC.config(boardConfig);
     M5StamPLC.begin();
+    if (config.plexlogGatewayEnabled)
+        plexlogGateway.begin(config.modbusBaud);
+    else
+        plexlogGateway.end();
     M5StamPLC.setBacklight(true);
     // Recover automatically from a future unforeseen library deadlock. All
     // normal Modbus/HTTPS waits are bounded and feed this watchdog.
@@ -2502,6 +2589,10 @@ void loop() {
         controlReapplyRequired = false;
         handleStableRseState(stableRseMask, "rse_reapply_after_superseded_batch");
     }
+    // In steady state this is the first downstream owner serviced on every
+    // loop.  One complete request is forwarded at a time, preserving Modbus
+    // RTU ordering and preventing any downstream multi-master collision.
+    plexlogGateway.service(true, plexlogForwardTimeoutMs());
     // The round-robin FC03 poll below is the only periodic inverter access:
     // one enabled ID every two seconds, read-only, and never an auto-write.
     pollNextEnabledInverter();

@@ -283,7 +283,8 @@ OTA is disabled so the rejected version is not immediately reinstalled.
 | **Enable automatic OTA** | Enables the scheduled SmartPLC firmware check. The default maintenance window is 01:00-01:59 Europe/Berlin. |
 | **Save OTA time** | Changes the beginning of the daily 60-minute maintenance window. Keep it in a verified non-daylight period. |
 | **Sync clock from PC** | Sets the onboard RTC. Wi-Fi/NTP later synchronizes it automatically. |
-| **USB flash V1.0.8** | Installs the bundled bootloader, OTA partition layout and firmware, with progress and verification. |
+| **USB flash V1.0.9** | Installs the bundled bootloader, OTA partition layout and firmware, with progress and verification. |
+| **Enable PlexLog gateway** | Enables the separate PORT.C proxy. It defaults to ON; disable it only when PlexLog is not connected through PORT.C. |
 | **Check SmartPLC update** | Checks the signed SmartPLC firmware manifest. If a newer version exists, the GUI asks before installation. |
 
 ![Commissioning tab](stamplc_14a_bridge/docs/user_manual_assets/gui_commissioning.png)
@@ -322,6 +323,34 @@ StampPLC RS485           Inverter RS485
 The exact relay assignment must match the selected profile and the grid
 operator's current written documentation.
 
+### PlexLog wiring added in V1.0.9
+
+PlexLog and SmartPLC must not remain as two masters in parallel on the P17
+bus. V1.0.9 uses two separate RS485 segments:
+
+```mermaid
+flowchart LR
+    PLM["PlexLog meter port"] --> M["Meter ID 1"]
+    PLI["PlexLog inverter port"] --> AD["Automatic-direction\nRS485/UART adapter"]
+    AD --> PC["StampPLC PORT.C\nGPIO4 RX / GPIO5 TX"]
+    SP["StampPLC PWR485"] --> P17["P17 bus"]
+    P17 --> INV["Inverter IDs 2-7"]
+```
+
+| Connection | Terminal |
+|---|---|
+| Adapter `RO` | PORT.C `GPIO4` / RX (white) |
+| Adapter `DI` | PORT.C `GPIO5` / TX (yellow) |
+| Adapter power | PORT.C 5 V and GND according to the adapter marking |
+| Adapter RS485 `A/B` | PlexLog inverter-port `A/B` |
+| StampPLC PWR485 `A/B/GND` | P17/inverter bus `A/B/GND` |
+| PlexLog meter port | Directly to meter ID 1; **never** to PORT.C |
+
+Use an automatic-direction RS485 adapter and completely remove PlexLog's old
+direct parallel connection to P17. No bypass relay is used. If SmartPLC is
+unpowered or the gateway is disabled, PlexLog intentionally reports lost
+inverter communication.
+
 ## Version history
 
 The first public release describes the complete product. Later GitHub Releases
@@ -329,6 +358,7 @@ list only the functions added, changed or corrected in that version so an
 installer can quickly identify the operational impact.
 
 See [all releases](https://github.com/tatsuo25103/14a-bridge/releases), the
+[V1.0.9 release notes](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.9.md), the
 [V1.0.8 release notes](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.8.md), the
 [V1.0.7 release notes](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.7.md) and the
 [V1.0.6 release notes](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.6.md).

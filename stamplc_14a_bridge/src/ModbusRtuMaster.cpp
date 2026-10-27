@@ -3,6 +3,12 @@
 namespace {
 constexpr uint8_t FC_READ_HOLDING = 0x03;
 constexpr uint8_t FC_WRITE_MULTIPLE = 0x10;
+// P17 normally commits a power-limit write well before the old fixed 300 ms
+// delay.  Verify early to keep a coincident PlexLog request inside its safe
+// response window.  A second read-only poll preserves compatibility with a
+// slower inverter without issuing another write.
+constexpr uint32_t POWER_VERIFY_INITIAL_SETTLE_MS = 140;
+constexpr uint32_t POWER_VERIFY_RECHECK_SETTLE_MS = 160;
 }
 
 ModbusRtuMaster::ModbusRtuMaster(HardwareSerial& serial, int8_t rxPin,
@@ -124,6 +130,37 @@ ModbusResult ModbusRtuMaster::readRaw(uint8_t slave, uint16_t address,
     return result;
 }
 
+bool ModbusRtuMaster::transactRaw(const uint8_t* request, size_t requestLength,
+                                  uint8_t* response, size_t responseCapacity,
+                                  size_t& responseLength, uint32_t timeoutMs,
+                                  String& detail) {
+    responseLength = 0;
+    if (!request || requestLength < 4 || !response || responseCapacity < 5) {
+        detail = "invalid raw transaction buffer";
+        return false;
+    }
+    const uint16_t expected = crc16(request, requestLength - 2);
+    const uint16_t supplied = request[requestLength - 2] |
+                              (request[requestLength - 1] << 8);
+    if (expected != supplied) {
+        detail = "invalid request CRC";
+        return false;
+    }
+    const uint8_t slave = request[0];
+    const uint8_t function = request[1];
+    if (slave == 0) {
+        detail = "broadcast forwarding is disabled";
+        return false;
+    }
+    transmit(request, requestLength);
+    if (!receive(slave, function, response, responseCapacity, responseLength,
+                 timeoutMs, detail))
+        return false;
+    detail = (response[1] & 0x80) ? "valid Modbus exception" :
+                                   "raw response verified";
+    return true;
+}
+
 ModbusResult ModbusRtuMaster::writeAndVerify(uint8_t slave, uint16_t address,
                                              uint8_t quantity, uint32_t value,
                                              uint32_t timeoutMs, uint8_t retries) {
@@ -164,13 +201,22 @@ ModbusResult ModbusRtuMaster::writeAndVerify(uint8_t slave, uint16_t address,
         receive(slave, FC_WRITE_MULTIPLE, response, sizeof(response), length,
                 ackTimeoutMs, ackDetail);
 
-        responsiveDelay(300 + attempt * 250);
-        result = readRaw(slave, address, quantity, timeoutMs);
-        anyCommunication = anyCommunication || result.communicationOk;
-        if (result.ok && result.value == value) {
-            result.detail = "write and readback verified on attempt " +
-                            String(attempt + 1) + "/" + String(retries);
-            return result;
+        responsiveDelay(POWER_VERIFY_INITIAL_SETTLE_MS + attempt * 100);
+        for (uint8_t verifyPoll = 0; verifyPoll < 2; ++verifyPoll) {
+            result = readRaw(slave, address, quantity, timeoutMs);
+            anyCommunication = anyCommunication || result.communicationOk;
+            if (result.ok && result.value == value) {
+                result.detail = "write and readback verified on attempt " +
+                                String(attempt + 1) + "/" + String(retries) +
+                                " poll " + String(verifyPoll + 1) + "/2";
+                return result;
+            }
+            // A valid but still-old readback means the inverter is committing
+            // the write. Poll once more instead of rewriting the register.
+            if (verifyPoll == 0 && result.ok)
+                responsiveDelay(POWER_VERIFY_RECHECK_SETTLE_MS);
+            else
+                break;
         }
         if (result.ok) {
             lastDetail = "readback " + String(result.value) +

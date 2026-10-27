@@ -24,6 +24,10 @@ public:
                                          uint16_t commandValue, uint16_t bitMask,
                                          bool expectedSet, uint32_t timeoutMs,
                                          uint8_t retries);
+    bool transactRaw(const uint8_t* request, size_t requestLength,
+                     uint8_t* response, size_t responseCapacity,
+                     size_t& responseLength, uint32_t timeoutMs,
+                     String& detail);
 
 private:
     HardwareSerial& serial_;

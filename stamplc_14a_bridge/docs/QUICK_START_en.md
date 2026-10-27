@@ -1,6 +1,6 @@
 # 14A Bridge Quick Installation and Commissioning Guide
 
-> Applies to SmartPLC firmware `V1.0.6` and Windows USB Configurator `V1.0.6`.
+> Applies to SmartPLC firmware `V1.0.9` and Windows USB Configurator `V1.0.9`.
 
 Complete these seven steps in order to send the RSE `100% / 60% / 30% / 0%` commands safely to up to six inverters.
 
@@ -21,7 +21,14 @@ Complete these seven steps in order to send the RSE `100% / 60% / 30% / 0%` comm
 
 RS485: connect `A -> A/D+` and `B -> B/D-`. Do not connect the PWR485 `VIN` terminal to the inverter.
 
-**Success:** StampPLC starts and displays `V1.0.6`.
+When PlexLog is installed, remove its direct parallel connection to P17. Keep
+the PlexLog meter port connected directly to meter ID 1. Connect the PlexLog
+inverter port through an **automatic-direction RS485/UART adapter** to
+StampPLC PORT.C: adapter `RO -> GPIO4/RX` (white), `DI -> GPIO5/TX` (yellow),
+plus 5 V/GND according to the adapter marking. StampPLC PWR485 remains the
+only connection to P17/inverter IDs 2-7.
+
+**Success:** StampPLC starts and displays `V1.0.9`.
 
 ## 2. Connect by USB
 
@@ -31,7 +38,7 @@ RS485: connect `A -> A/D+` and `B -> B/D-`. Do not connect the PWR485 `VIN` term
 4. Click **Connect**.
 5. Click **Read SmartPLC settings**.
 
-**Success:** The GUI shows the detected `[SMARTPLC] COMx V1.0.6` entry, then `CONNECTED COMx` after connection.
+**Success:** The GUI shows the detected `[SMARTPLC] COMx V1.0.9` entry, then `CONNECTED COMx` after connection.
 
 ## 3. Scan inverter IDs
 

@@ -120,7 +120,7 @@ namespace StampPlcRseConfigurator
 
     internal sealed class MainForm : Form
     {
-        private const string ReleaseVersion = "V1.0.8";
+        private const string ReleaseVersion = "V1.0.9";
         private static readonly Color Surface = Color.FromArgb(16, 22, 30);
         private static readonly Color Panel = Color.FromArgb(25, 34, 45);
         private static readonly Color Accent = Color.FromArgb(0, 220, 210);
@@ -141,6 +141,8 @@ namespace StampPlcRseConfigurator
         private readonly TextBox _baud = new TextBox();
         private readonly TextBox _register = new TextBox();
         private readonly ComboBox _rseProfile = new ComboBox();
+        private readonly CheckBox _plexLogGateway = new CheckBox();
+        private readonly Label _plexLogGatewayStatus = new Label();
         private readonly ComboBox _wifiSsid = new ComboBox();
         private readonly TextBox _wifiPassword = new TextBox();
         private readonly CheckBox _automaticOta = new CheckBox();
@@ -174,8 +176,10 @@ namespace StampPlcRseConfigurator
         private int _physicalRsePercent = -1;
         private string _currentMode = "";
         private bool _updatingWifiUi;
+        private bool _updatingPlexLogUi;
         private bool _updatingSettingsGrid;
         private bool? _pendingAutomaticOta;
+        private bool? _pendingPlexLogGateway;
         private volatile bool _scanningPorts;
         private string _connectedFirmwareVersion = "";
         private int _firstConfiguredId = 2;
@@ -196,6 +200,10 @@ namespace StampPlcRseConfigurator
             @"^Output:\s*(\d+%|UNCHANGED)\s+source:\s*(LIVE|TEST|SAFE|INVALID RSE)$");
         private static readonly Regex ModePattern = new Regex(
             @"^Mode:\s*(DRY-RUN|SAFE|TEST|LIVE)\s+RS485:\s*(\d+) baud\s+register:\s*(0x[0-9A-Fa-f]+)\s+quantity:\s*([12])$");
+        private static readonly Regex PlexLogGatewayPattern = new Regex(
+            @"^PLEXLOG GATEWAY=(ON|OFF) BAUD=(\d+) RX=(\d+) FORWARDED=(\d+) CACHE=(\d+) QUEUED=(\d+) INVALID=(\d+) DROPPED=(\d+) EXPIRED=(\d+) DOWNFAIL=(\d+) TTLMS=(\d+) QUEUEMS=(\d+)(?: CACHEENTRIES=(\d+) CONTROLTTLMS=(\d+) MAXQ=(\d+) LASTMS=(\d+) MAXMS=(\d+) REJECTED=(\d+) CONTROLHITS=(\d+)(?: RESCUED=(\d+) EXP_ID=(\d+) EXP_FC=(\d+) EXP_ADDR=(\d+) EXP_QTY=(\d+) EXP_AGE=(\d+))?)?$");
+        private static readonly Regex PlexLogConfigPattern = new Regex(
+            @"^PLEXLOG CONFIG STATUS=(OK|ERROR) ENABLED=(yes|no) DETAIL=(.*)$");
         private static readonly Regex IdPattern = new Regex(
             @"^([2-7])\s+(yes|no)\s+(\d+)\s+(\d+)\s+\d+\s+\d+\s+\d+\s+\d+\s+(\d+)\s+(\d+)\s+(yes|no)$");
         private static readonly Regex LegacyIdPattern = new Regex(
@@ -386,6 +394,16 @@ namespace StampPlcRseConfigurator
             });
             _rseProfile.SelectedIndex = 0;
             _rseProfile.Enabled = false;
+            _plexLogGateway.Text = "Enable PlexLog gateway";
+            _plexLogGateway.Checked = true;
+            _plexLogGateway.AutoSize = true;
+            _plexLogGateway.ForeColor = TextColor;
+            _plexLogGateway.Padding = new Padding(8, 5, 4, 0);
+            _plexLogGateway.CheckedChanged += PlexLogGatewayChanged;
+            _plexLogGatewayStatus.Text = "PLEXLOG: NOT READ";
+            _plexLogGatewayStatus.AutoSize = true;
+            _plexLogGatewayStatus.ForeColor = Muted;
+            _plexLogGatewayStatus.Padding = new Padding(8, 7, 4, 0);
             _settingsNotice.Text = "Ready | offline inverter settings remain pending";
             _settingsNotice.AutoSize = false;
             _settingsNotice.Size = new Size(300, 36);
@@ -396,7 +414,8 @@ namespace StampPlcRseConfigurator
             {
                 NewTextLabel("RS485 baud"), _baud,
                 NewTextLabel("Power register"), _register,
-                NewTextLabel("RSE profile"), _rseProfile
+                NewTextLabel("RSE profile"), _rseProfile,
+                _plexLogGateway, _plexLogGatewayStatus
             });
             settingsActionsFlow.Controls.AddRange(new Control[]
             {
@@ -1031,6 +1050,7 @@ namespace StampPlcRseConfigurator
                 ApplyFirmwareProtocol(selected.Version);
                 UpdateConnectedText();
                 SetAutomaticOtaStatus(null);
+                SetPlexLogGatewayStatus(null, "NOT READ");
                 AppendLog("[PC] Connected to " + selectedPort);
                 _statusTimer.Start();
                 var timer = new System.Windows.Forms.Timer { Interval = 300 };
@@ -1264,6 +1284,8 @@ namespace StampPlcRseConfigurator
             _rseProfile.Enabled = false;
             _rseProfile.SelectedIndex = 0;
             SetAutomaticOtaStatus(null);
+            _pendingPlexLogGateway = null;
+            SetPlexLogGatewayStatus(null, "NOT CONNECTED");
         }
 
         private void SerialDataReceived(object sender, SerialDataReceivedEventArgs e)
@@ -1487,6 +1509,7 @@ namespace StampPlcRseConfigurator
             ShowInlineNotice("Reading SmartPLC settings...", Accent, "[SETTINGS]");
             _wifiStatus.Text = "Reading...";
             SetAutomaticOtaStatus(null);
+            SetPlexLogGatewayStatus(null, "READING...");
             Send("show");
             var timer = new System.Windows.Forms.Timer { Interval = 180 };
             timer.Tick += delegate
@@ -1631,8 +1654,9 @@ namespace StampPlcRseConfigurator
 
         private static Version ParseReleaseVersion(string value)
         {
+            Match numeric = Regex.Match(value ?? "", @"\d+\.\d+\.\d+");
             Version parsed;
-            return Version.TryParse(value.Trim().TrimStart('V', 'v'), out parsed)
+            return numeric.Success && Version.TryParse(numeric.Value, out parsed)
                 ? parsed : new Version(0, 0, 0);
         }
 
@@ -1796,6 +1820,31 @@ namespace StampPlcRseConfigurator
             _automaticOtaStatus.Text = !enabled.HasValue ? "AUTO OTA: NOT READ" :
                 (enabled.Value ? "AUTO OTA: ON" : "AUTO OTA: OFF");
             _automaticOtaStatus.ForeColor = !enabled.HasValue ? Muted :
+                (enabled.Value ? Accent : Color.FromArgb(255, 184, 55));
+        }
+
+        private void PlexLogGatewayChanged(object sender, EventArgs e)
+        {
+            if (_updatingPlexLogUi) return;
+            bool requested = _plexLogGateway.Checked;
+            _pendingPlexLogGateway = requested;
+            if (Send("plexlog " + (requested ? "on" : "off")))
+            {
+                _plexLogGatewayStatus.Text = "PLEXLOG: SAVING...";
+                _plexLogGatewayStatus.ForeColor = Color.FromArgb(255, 184, 55);
+            }
+            else
+            {
+                _pendingPlexLogGateway = null;
+                SetPlexLogGatewayStatus(null, "Connect to SmartPLC");
+            }
+        }
+
+        private void SetPlexLogGatewayStatus(bool? enabled, string detail)
+        {
+            _plexLogGatewayStatus.Text = !enabled.HasValue ? "PLEXLOG: " + detail :
+                (enabled.Value ? "PLEXLOG: ON" : "PLEXLOG: OFF");
+            _plexLogGatewayStatus.ForeColor = !enabled.HasValue ? Muted :
                 (enabled.Value ? Accent : Color.FromArgb(255, 184, 55));
         }
 
@@ -1996,6 +2045,57 @@ namespace StampPlcRseConfigurator
                     (_currentMode == "TEST" ? Color.FromArgb(255, 184, 55) : Color.OrangeRed);
                 _baud.Text = match.Groups[2].Value;
                 _register.Text = match.Groups[3].Value.ToUpperInvariant();
+                return;
+            }
+            match = PlexLogGatewayPattern.Match(line.Trim());
+            if (match.Success)
+            {
+                bool enabled = match.Groups[1].Value == "ON";
+                bool staleWhileSaving = _pendingPlexLogGateway.HasValue &&
+                    enabled != _pendingPlexLogGateway.Value;
+                if (!staleWhileSaving)
+                {
+                    _pendingPlexLogGateway = null;
+                    _updatingPlexLogUi = true;
+                    _plexLogGateway.Checked = enabled;
+                    _updatingPlexLogUi = false;
+                    string detail = enabled
+                        ? "Forwarded " + match.Groups[4].Value +
+                          " | cached " + match.Groups[5].Value +
+                          " | failed " + match.Groups[10].Value
+                        : "OFF";
+                    if (enabled && match.Groups[15].Success)
+                    {
+                        detail += " | max queue " + match.Groups[15].Value +
+                            " | max " + match.Groups[17].Value + " ms" +
+                            " | rejected " + match.Groups[18].Value;
+                        if (match.Groups[20].Success)
+                            detail += " | expired " + match.Groups[9].Value +
+                                " | rescued " + match.Groups[20].Value;
+                    }
+                    SetPlexLogGatewayStatus(enabled, detail);
+                    if (enabled) _plexLogGatewayStatus.Text = "PLEXLOG: ON | " + detail;
+                }
+                return;
+            }
+            match = PlexLogConfigPattern.Match(line.Trim());
+            if (match.Success)
+            {
+                bool ok = match.Groups[1].Value == "OK";
+                bool enabled = match.Groups[2].Value == "yes";
+                _pendingPlexLogGateway = null;
+                if (ok)
+                {
+                    _updatingPlexLogUi = true;
+                    _plexLogGateway.Checked = enabled;
+                    _updatingPlexLogUi = false;
+                    SetPlexLogGatewayStatus(enabled, "saved");
+                }
+                else
+                {
+                    SetPlexLogGatewayStatus(null, "SAVE FAILED");
+                    _plexLogGatewayStatus.ForeColor = Color.OrangeRed;
+                }
                 return;
             }
             match = WifiPattern.Match(line.Trim());
@@ -2360,6 +2460,10 @@ namespace StampPlcRseConfigurator
                    OutputPattern.IsMatch("Output: UNCHANGED  source: INVALID RSE") &&
                    ModePattern.IsMatch("Mode: SAFE  RS485: 19200 baud  register: 0x04E5  quantity: 2") &&
                    ModePattern.IsMatch("Mode: TEST  RS485: 19200 baud  register: 0x04E5  quantity: 2") &&
+                   PlexLogGatewayPattern.IsMatch("PLEXLOG GATEWAY=ON BAUD=19200 RX=10 FORWARDED=8 CACHE=2 QUEUED=0 INVALID=0 DROPPED=0 EXPIRED=0 DOWNFAIL=0 TTLMS=5000 QUEUEMS=350") &&
+                   PlexLogGatewayPattern.IsMatch("PLEXLOG GATEWAY=ON BAUD=19200 RX=108 FORWARDED=56 CACHE=52 QUEUED=0 INVALID=0 DROPPED=0 EXPIRED=0 DOWNFAIL=0 TTLMS=10000 QUEUEMS=350 CACHEENTRIES=128 CONTROLTTLMS=20000 MAXQ=1 LASTMS=63 MAXMS=81 REJECTED=0 CONTROLHITS=12") &&
+                   PlexLogGatewayPattern.IsMatch("PLEXLOG GATEWAY=OFF BAUD=0 RX=0 FORWARDED=0 CACHE=0 QUEUED=0 INVALID=0 DROPPED=0 EXPIRED=0 DOWNFAIL=0 TTLMS=5000 QUEUEMS=350") &&
+                   PlexLogConfigPattern.IsMatch("PLEXLOG CONFIG STATUS=OK ENABLED=yes DETAIL=saved") &&
                    IdPattern.IsMatch("3   yes        18000    15000  15000  10800   5400      0    10800     10800  yes") &&
                    LegacyIdPattern.IsMatch("2   yes        15000  15000   9000   4500      0     9000      9000  yes") &&
                    ProbePattern.IsMatch("PROBE ID=3 REGISTER=0x04E5 VALUE=10000 STATUS=OK DETAIL=readback verified") &&
@@ -2380,7 +2484,8 @@ namespace StampPlcRseConfigurator
                    ParseReleaseVersion("1.0.4") < ParseReleaseVersion(ReleaseVersion) &&
                    ParseReleaseVersion("1.0.6") < ParseReleaseVersion(ReleaseVersion) &&
                    ParseReleaseVersion("1.0.7") < ParseReleaseVersion(ReleaseVersion) &&
-                   ParseReleaseVersion("1.0.8") == ParseReleaseVersion(ReleaseVersion) &&
+                   ParseReleaseVersion("1.0.8") < ParseReleaseVersion(ReleaseVersion) &&
+                   ParseReleaseVersion("1.0.9-dev") == ParseReleaseVersion(ReleaseVersion) &&
                    RseConfigPattern.IsMatch(
                        "RSECFG ID=3 P100=15000 F100=yes P60=10800 F60=yes P30=5400 F30=yes P0=0 F0=no") &&
                    RseConfigStatusPattern.IsMatch(
