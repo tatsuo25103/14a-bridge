@@ -27,6 +27,17 @@ FC03-Rücklesen. Unveränderte Sollwerte werden nicht ständig neu geschrieben.
 - FSP PowerManager Hybrid 10 kW
 - FSP PowerManager Hybrid 15 kW
 
+> [!IMPORTANT]
+> Vor der Inbetriebnahme müssen mindestens die folgenden Geräte-Firmwarestände
+> installiert sein. Neuere Versionen sind zulässig.
+
+| Gerät | Erforderliche Mindestversion |
+|---|---|
+| FSP PowerManager Hybrid 10 kW | `U1: 260226` · `U2: 251229` |
+| FSP PowerManager Hybrid 15 kW | `U1: 250819` · `U2: 250703` |
+| DualBox | `04.4G` |
+| P17-Karte | `17G` |
+
 ### 1.2 Windows-Anwendung installieren
 
 1. `14a_Bridge_Setup_V1.0.9.exe` aus den

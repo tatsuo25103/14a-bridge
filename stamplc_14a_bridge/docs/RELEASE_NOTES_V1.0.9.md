@@ -1,5 +1,10 @@
 # 14a Bridge V1.0.9
 
+> [!IMPORTANT]
+> Minimum equipment firmware: FSP PowerManager Hybrid 10 kW
+> `U1 260226 / U2 251229`; 15 kW `U1 250819 / U2 250703`; DualBox `04.4G`;
+> P17 card `17G`. Later versions are acceptable.
+
 ## Added
 
 - Two separate RS485 segments prevent the previous multi-master

@@ -1,5 +1,10 @@
 # 14a Bridge V1.0.9
 
+> [!IMPORTANT]
+> 設備最低韌體：FSP PowerManager Hybrid 10 kW
+> `U1 260226 / U2 251229`；15 kW `U1 250819 / U2 250703`；DualBox `04.4G`；
+> P17 Card `17G`。更新版本亦可。
+
 ## 新增功能
 
 - 使用兩段獨立的 RS485，避免 PlexLog 與 SmartPLC 同時成為 P17 Bus

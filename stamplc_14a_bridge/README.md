@@ -57,6 +57,17 @@ for the following equipment:
 - **FSP PowerManager Hybrid 10 kW**
 - **FSP PowerManager Hybrid 15 kW**
 
+> [!IMPORTANT]
+> Commission only after every device has at least the firmware below. A later
+> firmware version is acceptable.
+
+| Device | Minimum required firmware |
+|---|---|
+| FSP PowerManager Hybrid 10 kW | `U1: 260226` · `U2: 251229` |
+| FSP PowerManager Hybrid 15 kW | `U1: 250819` · `U2: 250703` |
+| DualBox | `04.4G` |
+| P17 card | `17G` |
+
 Compatibility assumes the inverter uses the tested Modbus register map and
 communication settings. Other Modbus RTU models must be verified for register
 address, data format, byte order, and write/readback behaviour before use.

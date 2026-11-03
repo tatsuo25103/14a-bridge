@@ -7,6 +7,11 @@ Complete these seven steps in order to send the RSE `100% / 60% / 30% / 0%` comm
 > [!CAUTION]
 > Never connect a 230 V RSE output directly to StampPLC. Use a correctly rated interface relay or isolation module. StampPLC digital inputs accept only 5-36 V DC.
 
+> [!IMPORTANT]
+> Required minimum device firmware: 10 kW inverter `U1 260226 / U2 251229`;
+> 15 kW inverter `U1 250819 / U2 250703`; DualBox `04.4G`; P17 card `17G`.
+> Later firmware versions are acceptable.
+
 ## 1. Wire the system
 
 ![System wiring](user_manual_assets/system_wiring.png)

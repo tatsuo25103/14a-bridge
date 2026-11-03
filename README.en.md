@@ -26,6 +26,17 @@ by an FC03 readback verification.
 - FSP PowerManager Hybrid 10 kW
 - FSP PowerManager Hybrid 15 kW
 
+> [!IMPORTANT]
+> Before commissioning, install at least the device firmware versions below.
+> Later versions are also acceptable.
+
+| Device | Minimum required firmware |
+|---|---|
+| FSP PowerManager Hybrid 10 kW | `U1: 260226` · `U2: 251229` |
+| FSP PowerManager Hybrid 15 kW | `U1: 250819` · `U2: 250703` |
+| DualBox | `04.4G` |
+| P17 card | `17G` |
+
 ## System overview
 
 ![14a Bridge wiring](stamplc_14a_bridge/docs/user_manual_assets/system_wiring.png)

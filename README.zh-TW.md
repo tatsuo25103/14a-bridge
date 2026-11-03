@@ -23,6 +23,16 @@ StampPLC 讀取 RSE 的無電位繼電器接點，依每台逆變器的 PV 裝�
 - FSP PowerManager Hybrid 10 kW
 - FSP PowerManager Hybrid 15 kW
 
+> [!IMPORTANT]
+> 裝機調適前，設備韌體必須至少升級至下列版本；更新版本亦可使用。
+
+| 設備 | 最低韌體版本 |
+|---|---|
+| FSP PowerManager Hybrid 10 kW | `U1: 260226` · `U2: 251229` |
+| FSP PowerManager Hybrid 15 kW | `U1: 250819` · `U2: 250703` |
+| DualBox | `04.4G` |
+| P17 Card | `17G` |
+
 ### 1.2 安裝 Windows 程式
 
 1. 從 [GitHub Releases](https://github.com/tatsuo25103/14a-bridge/releases/latest)

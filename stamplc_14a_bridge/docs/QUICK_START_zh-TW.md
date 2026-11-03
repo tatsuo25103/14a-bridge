@@ -7,6 +7,10 @@
 > [!CAUTION]
 > RSE 若輸出 230 V，不可直接接 StampPLC。必須使用中間繼電器或隔離模組。StampPLC 數位輸入只接受 DC 5～36 V。
 
+> [!IMPORTANT]
+> 設備最低韌體：10 kW 逆變器 `U1 260226 / U2 251229`；15 kW 逆變器
+> `U1 250819 / U2 250703`；DualBox `04.4G`；P17 Card `17G`。更新版本亦可。
+
 ## 1. 接線
 
 ![系統接線](user_manual_assets/system_wiring.png)

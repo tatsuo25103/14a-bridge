@@ -1,5 +1,10 @@
 # 14a Bridge V1.0.9
 
+> [!IMPORTANT]
+> Erforderliche Mindeststände: FSP PowerManager Hybrid 10 kW
+> `U1 260226 / U2 251229`; 15 kW `U1 250819 / U2 250703`; DualBox `04.4G`;
+> P17-Karte `17G`. Neuere Versionen sind zulässig.
+
 ## Neu
 
 - Zwei getrennte RS485-Segmente verhindern die bisher mögliche
