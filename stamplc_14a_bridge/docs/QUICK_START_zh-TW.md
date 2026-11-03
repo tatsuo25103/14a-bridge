@@ -21,11 +21,15 @@
 
 RS485：`A → A/D+`、`B → B/D−`。PWR485 的 `VIN` 不要接逆變器。
 
-有 PlexLog 時，必須移除 PlexLog 與 P17 原本的直接並聯。PlexLog 電表通訊埠
-維持直接接電表 ID 1；逆變器通訊埠經由**自動方向 RS485/UART 模組**接
-StampPLC PORT.C：模組 `RO → GPIO4/RX`（白線）、`DI → GPIO5/TX`（黃線），
-並依模組標示接 5 V/GND。StampPLC PWR485 是 P17／逆變器 ID 2–7 唯一的
-Master 接線。
+有 PlexLog 時，必須移除 PlexLog 與 P17 原本的直接並聯。PlexLog 逆變器通道
+經由**自動方向 RS485/UART 模組**接 StampPLC PORT.C：PlexLog Pin 9（藍）
+接模組 `B`、Pin 8（綠）接模組 `A`；模組 `RO → GPIO4/RX`、
+`DI → GPIO5/TX`，並依模組標示接 5 V/GND。StampPLC PWR485 是 P17 唯一
+Master：`B → RJ45 Pin 5`（藍）、`A → Pin 4`（藍白）。
+
+電表通道依新圖經過 Dual ModBus Box：E-Meter Pin 9 → RJ45 Pin 5、Pin 10 →
+Pin 4；PlexLog Pin 4 → RJ45 Pin 5、Pin 3 → Pin 4。PlexLog 電表通道不可接
+PORT.C。
 
 **成功：** StampPLC 開機並顯示 `V1.0.9`。
 
@@ -36,8 +40,11 @@ Master 接線。
 3. 選擇新出現的 COM。
 4. 按 **Connect**。
 5. 按 **Read SmartPLC settings**。
+6. 有安裝 PlexLog 時，勾選 **Enable PlexLog gateway**，等待顯示
+   `PLEXLOG: ON`。
 
-**成功：** GUI 先顯示偵測到的 `[SMARTPLC] COMx V1.0.9`，連線後顯示 `CONNECTED COMx`。
+**成功：** GUI 先顯示偵測到的 `[SMARTPLC] COMx V1.0.9`，連線後顯示
+`CONNECTED COMx`；有 PlexLog 時，Settings 也顯示 `PLEXLOG: ON`。
 
 ## 3. 掃描逆變器
 

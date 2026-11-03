@@ -42,56 +42,58 @@ FC03-Rücklesen. Unveränderte Sollwerte werden nicht ständig neu geschrieben.
 
 ![Systemverdrahtung](stamplc_14a_bridge/docs/user_manual_assets/system_wiring.png)
 
-```text
-12-V-DC-Netzteil
-  +12 V ---------------- StampPLC VIN+
-   0 V ---------------- StampPLC VIN-/GND und Eingangs-COM
+[Verdrahtungsplan als PDF herunterladen](stamplc_14a_bridge/docs/user_manual_assets/14a_bridge_wiring.pdf)
 
-RSE, potenzialfreie Kontakte
-  Relais-COM ------------ +12 V
-  K1 / 100 % ------------ DI1
-  K2 /  60 % ------------ DI2
-  K3 /  30 % ------------ DI3
-  K4 /   0 % ------------ DI4
+> [!IMPORTANT]
+> Dieser Plan ersetzt die frühere vereinfachte Zeichnung. Er zeigt auch die
+> PlexLog-, Dual-ModBus-Box-, Zähler-, Batterie- und P17-Verbindungen. Vor dem
+> Einschalten jede A/B- und RJ45-Pinbelegung am realen Gerät kontrollieren.
 
-StampPLC RS485            Wechselrichter RS485
-  A ---------------------- A
-  B ---------------------- B
-  GND -------------------- GND
-```
+#### Versorgung und RSE-Eingänge
+
+| Quelle | Ziel | Funktion |
+|---|---|---|
+| 12-V-Netzteil `+V` | StampPLC `VIN` und RSE-Empfänger `COM` | Versorgung / gemeinsames Relaissignal |
+| 12-V-Netzteil `-V` | StampPLC `GND` und `COM` | Versorgungsrückleiter und DI-Bezug |
+| RSE `K1 / K2 / K3 / K4` | StampPLC `IN1 / IN2 / IN3 / IN4` | `100 % / 60 % / 30 % / 0 %` |
 
 Nur **potenzialfreie** RSE-Kontakte direkt anschließen. Niemals geschaltete
 230 V auf einen 5–36-V-DC-Eingang legen. Kontaktzuordnung und gemeinsamer Bezug
 müssen dem ausgewählten RSE-Profil und den aktuellen Netzbetreiberunterlagen
 entsprechen.
 
-#### Zusätzliche PlexLog-Verdrahtung ab V1.0.9
+#### Wechselrichter-, P17- und PlexLog-Kommunikation
 
 PlexLog und SmartPLC dürfen **nicht parallel als zwei Master** am P17-Bus
-liegen. V1.0.9 verwendet deshalb zwei getrennte RS485-Segmente:
+liegen. Der SmartPLC bildet deshalb die kontrollierte Brücke zwischen zwei
+getrennten Segmenten:
 
-```mermaid
-flowchart LR
-    PLM["PlexLog Zählerport"] --> M["Zähler ID 1"]
-    PLI["PlexLog Wechselrichterport"] --> AD["RS485/UART-Wandler\nautomatische Richtung"]
-    AD --> PC["StampPLC PORT.C\nGPIO4 RX / GPIO5 TX"]
-    SP["StampPLC PWR485"] --> P17["P17-Bus"]
-    P17 --> INV["Wechselrichter IDs 2-7"]
-```
+1. **PlexLog-Wechselrichterport → ISO485-Wandler → StampPLC PORT.C**
+2. **StampPLC PWR485 → P17-Karte → Wechselrichter IDs 2–7**
 
-| Verbindung | Anschluss |
+| Verbindung | Pinbelegung laut Plan |
 |---|---|
-| Wandler `RO` | PORT.C `GPIO4` / RX (weiß) |
-| Wandler `DI` | PORT.C `GPIO5` / TX (gelb) |
-| Wandler Versorgung | PORT.C 5 V und GND entsprechend der Wandlerbeschriftung |
-| Wandler RS485 `A/B` | PlexLog-Wechselrichterport `A/B` |
-| StampPLC PWR485 `A/B/GND` | P17-/Wechselrichterbus `A/B/GND` |
-| PlexLog-Zählerport | direkt zum Zähler ID 1; **nicht** an PORT.C |
+| PlexLog Wechselrichterport | Pin 9 (blau) → ISO485 `B`; Pin 8 (grün) → ISO485 `A` |
+| ISO485 UART-Seite | `RO` → PORT.C `GPIO4/RX`; `DI` → PORT.C `GPIO5/TX`; 5 V/GND nach Wandlerbeschriftung |
+| StampPLC PWR485 → P17-RJ45 | `B` → Pin 5 (blau); `A` → Pin 4 (blau/weiß) |
 
-Es ist ein RS485-Wandler mit automatischer Richtungsumschaltung erforderlich.
-Die direkte PlexLog-Verbindung zum P17-Bus ist vollständig zu entfernen. Es
-gibt kein Bypass-Relais: Bei stromloser StampPLC oder abgeschaltetem Gateway
-zeigt PlexLog die Wechselrichterkommunikation als unterbrochen an.
+Für PORT.C ist ein RS485-Wandler mit **automatischer Richtungsumschaltung**
+erforderlich. Die frühere direkte PlexLog-Verbindung zum P17-Bus vollständig
+entfernen. Es gibt kein Bypass-Relais: Bei stromloser SmartPLC oder
+abgeschaltetem Gateway zeigt PlexLog die Wechselrichterkommunikation als
+unterbrochen an.
+
+#### Zähler und Dual ModBus Box
+
+Der PlexLog-Zählerkanal wird gemäß neuem Plan über die Dual ModBus Box geführt;
+er wird nicht an PORT.C angeschlossen.
+
+| Verbindung | Pinbelegung laut Plan |
+|---|---|
+| PM-Emeter → Dual ModBus Box | E-Meter Pin 9 → RJ45 Pin 5 (blau); Pin 10 → RJ45 Pin 4 (blau/weiß) |
+| PlexLog Zählerkanal → Dual ModBus Box | PlexLog Pin 4 → RJ45 Pin 5 (blau); Pin 3 → RJ45 Pin 4 (blau/weiß) |
+| Zählerparameter | ID `1`, `19200`, `8N1`; Gerätepasswort `1000` |
+| Weitere Box-Verbindungen | BMS-Port zur Batterie und RS232 zum Wechselrichter wie im Plan gezeigt |
 
 ### 1.4 Erstinbetriebnahme
 
@@ -132,6 +134,22 @@ ist lesend und speichert erst nach ausdrücklichem **Save inverter settings**.
 | **Sync clock from PC** | Stellt die RTC; bei WLAN erfolgt zusätzlich tägliche NTP-Synchronisation. |
 | **USB flash V1.0.9** | Installiert das mitgelieferte Firmwarepaket mit Fortschritt und Schreibprüfung. |
 | **Check SmartPLC update** | Prüft signierte SmartPLC-Updates; bei neuer Version folgt eine Bestätigungsfrage. |
+
+#### PlexLog-Gateway in der PC-Anwendung aktivieren
+
+![PlexLog-Gateway in Settings](stamplc_14a_bridge/docs/user_manual_assets/gui_plexlog_gateway.png)
+
+1. SmartPLC per USB verbinden und **Scan** wählen.
+2. Unter **Settings** zuerst **Read SmartPLC settings** wählen.
+3. **Enable PlexLog gateway** markieren. Die Einstellung wird sofort dauerhaft
+   in der SmartPLC gespeichert.
+4. Warten, bis rechts daneben `PLEXLOG: ON` erscheint. `NOT READ` bedeutet nur,
+   dass der Status noch nicht von einer verbundenen SmartPLC gelesen wurde.
+5. Das Gateway nur deaktivieren, wenn kein PlexLog über PORT.C angeschlossen ist.
+
+Nach dem Aktivieren muss PlexLog den Wechselrichter wieder erreichen. Ist die
+SmartPLC stromlos, PORT.C falsch verdrahtet oder das Gateway ausgeschaltet,
+meldet PlexLog absichtlich eine unterbrochene Wechselrichterkommunikation.
 
 ### 2.2 Commissioning
 

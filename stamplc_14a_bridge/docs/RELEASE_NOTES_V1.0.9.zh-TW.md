@@ -28,9 +28,9 @@
 ## 必須修改的接線
 
 PlexLog 不可再與 SmartPLC 並聯在同一條 P17 Bus。PlexLog 的逆變器通訊埠
-只能經由自動方向 RS485 模組接到 PORT.C；PlexLog 的獨立電表通訊埠維持直接
-連接電表（ID 1）。系統不使用旁路 Relay；SmartPLC 斷電或關閉 gateway 時，
-PlexLog 會如實顯示逆變器通訊中斷。
+只能經由自動方向 RS485 模組接到 PORT.C；PlexLog 的獨立電表通道與
+PM-Emeter（ID 1）依最新版接線圖改經 Dual ModBus Box。系統不使用旁路
+Relay；SmartPLC 斷電或關閉 gateway 時，PlexLog 會如實顯示逆變器通訊中斷。
 
 ## 發布前驗證
 

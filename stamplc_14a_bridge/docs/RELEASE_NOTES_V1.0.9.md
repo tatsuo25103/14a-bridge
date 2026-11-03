@@ -32,9 +32,10 @@
 
 PlexLog must no longer remain in parallel with SmartPLC on the P17 bus. Connect
 the PlexLog inverter port only through an automatic-direction RS485 adapter to
-PORT.C. Keep PlexLog's separate meter port directly connected to the meter
-(ID 1). There is no bypass relay; if SmartPLC is powered off or the gateway is
-disabled, PlexLog intentionally reports lost inverter communication.
+PORT.C. Route the separate PlexLog meter channel and PM-Emeter (ID 1) through
+the Dual ModBus Box as documented in the current wiring diagram. There is no
+bypass relay; if SmartPLC is powered off or the gateway is disabled, PlexLog
+intentionally reports lost inverter communication.
 
 ## Verification performed before release
 

@@ -36,36 +36,33 @@ StampPLC 讀取 RSE 的無電位繼電器接點，依每台逆變器的 PV 裝�
 
 ![系統接線圖](stamplc_14a_bridge/docs/user_manual_assets/system_wiring.png)
 
-```text
-DC 12 V 電源
-  +12 V ---------------- StampPLC VIN+
-   0 V ---------------- StampPLC VIN-/GND 與輸入 COM
+[下載 PDF 接線圖](stamplc_14a_bridge/docs/user_manual_assets/14a_bridge_wiring.pdf)
 
-RSE 無電位接點
-  繼電器 COM ----------- +12 V
-  K1 / 100% ------------ DI1
-  K2 /  60% ------------ DI2
-  K3 /  30% ------------ DI3
-  K4 /   0% ------------ DI4
+> [!IMPORTANT]
+> 這張圖取代舊版簡化接線圖，並包含 PlexLog、Dual ModBus Box、電表、電池與
+> P17 的完整路徑。通電前必須依實機再次核對 A/B 及 RJ45 Pin 腳。
 
-StampPLC RS485           逆變器 RS485
-  A --------------------- A
-  B --------------------- B
-  GND ------------------- GND
-```
+#### 電源與 RSE 輸入
+
+| 來源 | 接到 | 功能 |
+|---|---|---|
+| 12 V 電源 `+V` | StampPLC `VIN`、RSE 接收器 `COM` | 系統供電與接點訊號 |
+| 12 V 電源 `-V` | StampPLC `GND`、`COM` | 電源負極與 DI 共同參考 |
+| RSE `K1 / K2 / K3 / K4` | StampPLC `IN1 / IN2 / IN3 / IN4` | `100% / 60% / 30% / 0%` |
 
 只能把 **無電位接點**直接接入 StampPLC。絕不可把切換後的 230 V 接到
 5–36 V DC 輸入。接點定義與共地方式必須符合所選 RSE Profile 及電網營運商
 最新文件。
 
-#### V1.0.9 新增 PlexLog 接線
+#### 逆變器、P17 與 PlexLog 通訊
 
 PlexLog 與 SmartPLC 不可再並聯成同一條 P17 Bus 上的兩個 Master。V1.0.9
-改成兩段獨立 RS485：
+由 SmartPLC 控制兩段彼此分離的 RS485：
 
 ```mermaid
 flowchart LR
-    PLM["PlexLog 電表通訊埠"] --> M["電表 ID 1"]
+    M["PM-Emeter ID 1"] --> DB["Dual ModBus Box"]
+    PLM["PlexLog 電表通道"] --> DB
     PLI["PlexLog 逆變器通訊埠"] --> AD["自動方向 RS485/UART 模組"]
     AD --> PC["StampPLC PORT.C\nGPIO4 RX / GPIO5 TX"]
     SP["StampPLC PWR485"] --> P17["P17 Bus"]
@@ -77,13 +74,24 @@ flowchart LR
 | 模組 `RO` | PORT.C `GPIO4`／RX（白線） |
 | 模組 `DI` | PORT.C `GPIO5`／TX（黃線） |
 | 模組電源 | 依模組標示接 PORT.C 5 V 與 GND |
-| 模組 RS485 `A/B` | PlexLog 逆變器通訊埠 `A/B` |
-| StampPLC PWR485 `A/B/GND` | P17／逆變器 Bus `A/B/GND` |
-| PlexLog 電表通訊埠 | 維持直接連接電表 ID 1，**不可**接到 PORT.C |
+| PlexLog 逆變器通訊埠 | Pin 9（藍）→ ISO485 `B`；Pin 8（綠）→ ISO485 `A` |
+| ISO485 UART 端 | `RO` → PORT.C `GPIO4/RX`；`DI` → PORT.C `GPIO5/TX`；依模組標示接 5 V/GND |
+| StampPLC PWR485 → P17 RJ45 | `B` → Pin 5（藍）；`A` → Pin 4（藍白） |
 
 必須使用自動方向 RS485 模組，並完全移除 PlexLog 原本與 P17 Bus 的直接
 並聯接線。本設計沒有旁路 Relay；SmartPLC 斷電或 gateway 關閉時，PlexLog
 會如實顯示逆變器通訊中斷。
+
+#### 電表與 Dual ModBus Box
+
+PlexLog 電表通道依新圖改接 Dual ModBus Box，不能接到 PORT.C。
+
+| 接線 | Pin 腳 |
+|---|---|
+| PM-Emeter → Dual ModBus Box | E-Meter Pin 9 → RJ45 Pin 5（藍）；Pin 10 → RJ45 Pin 4（藍白） |
+| PlexLog 電表通道 → Dual ModBus Box | PlexLog Pin 4 → RJ45 Pin 5（藍）；Pin 3 → RJ45 Pin 4（藍白） |
+| 電表設定 | ID `1`、`19200`、`8N1`；設備密碼 `1000` |
+| 其他連接 | Dual ModBus Box 的 BMS 接電池，RS232 接逆變器，位置依接線圖 |
 
 ### 1.4 第一次裝機
 
@@ -122,6 +130,20 @@ flowchart LR
 | **Sync clock from PC** | 用電腦校正 RTC；連網後每天也會以 NTP 校時。 |
 | **USB flash V1.0.9** | 寫入安裝包內的正式韌體，顯示進度並驗證寫入結果。 |
 | **Check SmartPLC update** | 檢查簽章韌體；確定有新版時才詢問是否更新。 |
+
+#### 在上位機開啟 PlexLog gateway
+
+![啟用 PlexLog gateway](stamplc_14a_bridge/docs/user_manual_assets/gui_plexlog_gateway.png)
+
+1. 以 USB 連接 SmartPLC，按 **Scan**。
+2. 在 **Settings** 先按 **Read SmartPLC settings**。
+3. 勾選 **Enable PlexLog gateway**；SmartPLC 會立即永久保存設定。
+4. 等右側顯示 `PLEXLOG: ON`。`NOT READ` 只表示尚未從已連線的 SmartPLC
+   讀取狀態，不代表功能關閉。
+5. 只有未透過 PORT.C 連接 PlexLog 時才取消勾選。
+
+啟用後要確認 PlexLog 能重新讀到逆變器。SmartPLC 斷電、PORT.C 接錯或關閉
+gateway 時，PlexLog 會如實顯示逆變器通訊中斷。
 
 ### 2.2 Commissioning
 

@@ -36,8 +36,9 @@
 PlexLog darf nicht mehr parallel mit der SmartPLC am P17-Bus liegen. Der
 PlexLog-Wechselrichterport wird ausschließlich über einen RS485-Wandler mit
 automatischer Richtungsumschaltung an PORT.C angeschlossen. Der separate
-PlexLog-Zählerport bleibt direkt mit dem Zähler (ID 1) verbunden. Es gibt kein
-Bypass-Relais; bei Ausfall oder Abschaltung der SmartPLC meldet PlexLog die
+PlexLog-Zählerkanal und der PM-Emeter (ID 1) werden entsprechend dem aktuellen
+Verdrahtungsplan über die Dual ModBus Box geführt. Es gibt kein Bypass-Relais;
+bei Ausfall oder Abschaltung der SmartPLC meldet PlexLog die
 Wechselrichterkommunikation daher als unterbrochen.
 
 ## Prüfung vor Freigabe

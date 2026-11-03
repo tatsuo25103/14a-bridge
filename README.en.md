@@ -298,6 +298,15 @@ OTA is disabled so the rejected version is not immediately reinstalled.
 
 ## Basic wiring
 
+![Complete system wiring](stamplc_14a_bridge/docs/user_manual_assets/system_wiring.png)
+
+[Download the wiring diagram as PDF](stamplc_14a_bridge/docs/user_manual_assets/14a_bridge_wiring.pdf)
+
+> [!IMPORTANT]
+> This diagram replaces the former simplified wiring picture. It includes the
+> PlexLog, Dual ModBus Box, meter, battery and P17 paths. Verify every A/B and
+> RJ45 pin assignment on the actual hardware before applying power.
+
 Only use the shown direct DI wiring with **potential-free RSE contacts**.
 Never connect a switched 230 V signal directly to a StampPLC 5-36 V DC input.
 Use a correctly rated isolation/interface relay where required.
@@ -314,23 +323,23 @@ RSE potential-free contacts
   K3 /  30% ------------ DI3
   K4 /   0% ------------ DI4
 
-StampPLC RS485           Inverter RS485
-  A --------------------- A
-  B --------------------- B
-  GND ------------------- GND
+StampPLC PWR485          P17 RJ45
+  B --------------------- pin 5 (blue)
+  A --------------------- pin 4 (blue/white)
 ```
 
 The exact relay assignment must match the selected profile and the grid
 operator's current written documentation.
 
-### PlexLog wiring added in V1.0.9
+### PlexLog and Dual ModBus Box wiring
 
 PlexLog and SmartPLC must not remain as two masters in parallel on the P17
-bus. V1.0.9 uses two separate RS485 segments:
+bus. SmartPLC is the controlled bridge between two separate RS485 segments:
 
 ```mermaid
 flowchart LR
-    PLM["PlexLog meter port"] --> M["Meter ID 1"]
+    M["PM-Emeter ID 1"] --> DB["Dual ModBus Box"]
+    PLM["PlexLog meter channel"] --> DB
     PLI["PlexLog inverter port"] --> AD["Automatic-direction\nRS485/UART adapter"]
     AD --> PC["StampPLC PORT.C\nGPIO4 RX / GPIO5 TX"]
     SP["StampPLC PWR485"] --> P17["P17 bus"]
@@ -342,14 +351,36 @@ flowchart LR
 | Adapter `RO` | PORT.C `GPIO4` / RX (white) |
 | Adapter `DI` | PORT.C `GPIO5` / TX (yellow) |
 | Adapter power | PORT.C 5 V and GND according to the adapter marking |
-| Adapter RS485 `A/B` | PlexLog inverter-port `A/B` |
-| StampPLC PWR485 `A/B/GND` | P17/inverter bus `A/B/GND` |
-| PlexLog meter port | Directly to meter ID 1; **never** to PORT.C |
+| PlexLog inverter port | Pin 9 (blue) → adapter `B`; pin 8 (green) → adapter `A` |
+| Adapter UART side | `RO` → PORT.C `GPIO4/RX`; `DI` → PORT.C `GPIO5/TX`; 5 V/GND according to the adapter marking |
+| StampPLC PWR485 → P17 RJ45 | `B` → pin 5 (blue); `A` → pin 4 (blue/white) |
+| PM-Emeter → Dual ModBus Box | Meter pin 9 → RJ45 pin 5 (blue); pin 10 → RJ45 pin 4 (blue/white) |
+| PlexLog meter channel → Dual ModBus Box | PlexLog pin 4 → RJ45 pin 5 (blue); pin 3 → RJ45 pin 4 (blue/white) |
+| Meter settings | ID `1`, `19200`, `8N1`; device password `1000` |
 
 Use an automatic-direction RS485 adapter and completely remove PlexLog's old
 direct parallel connection to P17. No bypass relay is used. If SmartPLC is
 unpowered or the gateway is disabled, PlexLog intentionally reports lost
 inverter communication.
+
+The PlexLog meter channel is connected through the Dual ModBus Box as shown in
+the new diagram, not to PORT.C. Keep the battery BMS and inverter RS232 links on
+their indicated Dual ModBus Box ports.
+
+### Enable the PlexLog gateway in the Windows application
+
+![Enable PlexLog gateway](stamplc_14a_bridge/docs/user_manual_assets/gui_plexlog_gateway.png)
+
+1. Connect SmartPLC by USB and click **Scan**.
+2. On **Settings**, click **Read SmartPLC settings** first.
+3. Tick **Enable PlexLog gateway**. The controller saves the choice immediately.
+4. Wait for the adjacent status to show `PLEXLOG: ON`. `NOT READ` only means
+   that no connected SmartPLC status has been read yet.
+5. Disable the gateway only when PlexLog is not wired through PORT.C.
+
+After enabling it, confirm that PlexLog can read the inverter again. A powered-
+off SmartPLC, incorrect PORT.C wiring or a disabled gateway is intentionally
+visible to PlexLog as lost inverter communication.
 
 ## Version history
 

@@ -99,27 +99,30 @@ the StampPLC is powered through USB during bench testing, the external 12 V
 supply `0 V` may be connected to `COM` for the input circuit; for the final
 12 V installation, connect the supply return as shown in the diagram.
 
-### RS485 terminals
+### PWR485 to P17 terminals
 
-| StampPLC PWR485 | Inverter | Function |
+| StampPLC PWR485 | P17 RJ45 | Wire shown in the diagram |
 |---|---|---|
-| `A` | `A` | RS485 A / D+ |
-| `B` | `B` | RS485 B / D- |
-| `GND` | `GND` | Signal reference when required by the inverter installation |
+| `B` | pin 5 | blue |
+| `A` | pin 4 | blue/white |
 
 The PWR485 power pin is connected to StampPLC `VIN` and therefore carries
-12 V. Normally connect only RS485 `A`, `B`, and the required signal reference.
-Do not connect the PWR485 power pin to the inverter unless its documentation
-explicitly requires that voltage.
+12 V. Do not connect that power pin to P17. Use the A/B connections shown in
+the current wiring diagram and verify the RJ45 pin numbering before power-up.
 
 ### PlexLog dual-RS485 wiring (V1.0.9 and later)
 
 PlexLog and SmartPLC must not remain as two masters in parallel on P17. Use
 two electrically separate buses:
 
+![Complete PlexLog, SmartPLC, P17 and Dual ModBus Box wiring](docs/user_manual_assets/system_wiring.png)
+
+[Download the wiring diagram as PDF](docs/user_manual_assets/14a_bridge_wiring.pdf)
+
 ```mermaid
 flowchart LR
-    PLM["PlexLog meter port"] --> M["Meter ID 1"]
+    M["PM-Emeter ID 1"] --> DB["Dual ModBus Box"]
+    PLM["PlexLog meter channel"] --> DB
     PLI["PlexLog inverter port"] --> AD["Automatic-direction\nRS485/UART adapter"]
     AD --> PC["StampPLC PORT.C\nGPIO4 RX / GPIO5 TX"]
     SP["StampPLC PWR485"] --> P17["P17 bus"]
@@ -128,17 +131,20 @@ flowchart LR
 
 | Connection | Terminal |
 |---|---|
-| Adapter `RO` | PORT.C `GPIO4` / UART2 RX (white) |
-| Adapter `DI` | PORT.C `GPIO5` / UART2 TX (yellow) |
-| Adapter power | PORT.C 5 V and GND, according to the adapter marking |
-| Adapter RS485 `A/B` | PlexLog inverter-port `A/B` |
-| StampPLC PWR485 `A/B/GND` | P17/inverter bus `A/B/GND` |
-| PlexLog meter port | Directly to meter ID 1; never to PORT.C |
+| PlexLog inverter port | Pin 9 (blue) → adapter `B`; pin 8 (green) → adapter `A` |
+| Adapter UART side | `RO` → PORT.C `GPIO4/RX`; `DI` → PORT.C `GPIO5/TX`; 5 V/GND according to the adapter marking |
+| StampPLC PWR485 → P17 RJ45 | `B` → pin 5 (blue); `A` → pin 4 (blue/white) |
+| PM-Emeter → Dual ModBus Box | Meter pin 9 → RJ45 pin 5 (blue); pin 10 → RJ45 pin 4 (blue/white) |
+| PlexLog meter channel → Dual ModBus Box | PlexLog pin 4 → RJ45 pin 5 (blue); pin 3 → RJ45 pin 4 (blue/white) |
+| Meter settings | ID `1`, `19200`, `8N1`; device password `1000` |
 
 Use an automatic-direction RS485 adapter. Remove PlexLog's former direct
 parallel connection to P17 completely. Both segments use the configured P17
 baud rate and 8N1. No bypass relay is used: a powered-off SmartPLC or disabled
 gateway is intentionally visible to PlexLog as lost inverter communication.
+
+The meter channel is connected through the Dual ModBus Box, not to PORT.C.
+Keep the battery BMS and inverter RS232 links on their indicated box ports.
 
 ## 1.4 Identify and connect the StampPLC
 
@@ -278,6 +284,13 @@ continues even when the GUI is closed or USB is disconnected.
 | **Save inverter settings** | Validates the table, saves enabled IDs, PV power, verified inverter maximum, RS485 settings, and RSE profile to StampPLC NVS. Online units are verified using bounded Modbus write/readback; offline or unsafe rows remain `PENDING` instead of being discarded. |
 | **Read SmartPLC settings** | Reloads the complete saved inverter, RS485, RSE profile, Wi-Fi, clock, firmware, and OTA state from the connected controller. Use this before editing and again after saving. |
 | **Enable PlexLog gateway** | Enables the separate PORT.C proxy. Schema-5 migration enables it by default. Disable it only when PlexLog is not connected through PORT.C. |
+
+![Enable PlexLog gateway in Settings](docs/user_manual_assets/gui_plexlog_gateway.png)
+
+To commission the proxy, connect the controller, click **Read SmartPLC
+settings**, tick **Enable PlexLog gateway**, and wait for `PLEXLOG: ON`. A
+`NOT READ` label only means that the connected controller status has not been
+read yet. The setting is stored persistently in SmartPLC.
 
 The installed PV power may legitimately exceed the inverter rating. The GUI
 keeps that value and marks the cell with a yellow warning. It does not force

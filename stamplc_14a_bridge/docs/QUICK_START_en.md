@@ -21,12 +21,16 @@ Complete these seven steps in order to send the RSE `100% / 60% / 30% / 0%` comm
 
 RS485: connect `A -> A/D+` and `B -> B/D-`. Do not connect the PWR485 `VIN` terminal to the inverter.
 
-When PlexLog is installed, remove its direct parallel connection to P17. Keep
-the PlexLog meter port connected directly to meter ID 1. Connect the PlexLog
-inverter port through an **automatic-direction RS485/UART adapter** to
-StampPLC PORT.C: adapter `RO -> GPIO4/RX` (white), `DI -> GPIO5/TX` (yellow),
-plus 5 V/GND according to the adapter marking. StampPLC PWR485 remains the
-only connection to P17/inverter IDs 2-7.
+When PlexLog is installed, remove its direct parallel connection to P17.
+Connect the PlexLog inverter channel through an **automatic-direction
+RS485/UART adapter** to StampPLC PORT.C: PlexLog pin 9 (blue) to adapter `B`,
+pin 8 (green) to adapter `A`; adapter `RO -> GPIO4/RX`, `DI -> GPIO5/TX`, plus
+5 V/GND according to the adapter marking. StampPLC PWR485 is the only P17
+master connection: `B -> RJ45 pin 5` (blue), `A -> pin 4` (blue/white).
+
+Route the meter channel through the Dual ModBus Box as shown: E-Meter pin 9 to
+RJ45 pin 5 and pin 10 to pin 4; PlexLog pin 4 to RJ45 pin 5 and pin 3 to pin 4.
+Do not connect the PlexLog meter channel to PORT.C.
 
 **Success:** StampPLC starts and displays `V1.0.9`.
 
@@ -37,8 +41,12 @@ only connection to P17/inverter IDs 2-7.
 3. Select the new COM port.
 4. Click **Connect**.
 5. Click **Read SmartPLC settings**.
+6. If PlexLog is installed, tick **Enable PlexLog gateway** and wait for
+   `PLEXLOG: ON`.
 
-**Success:** The GUI shows the detected `[SMARTPLC] COMx V1.0.9` entry, then `CONNECTED COMx` after connection.
+**Success:** The GUI shows the detected `[SMARTPLC] COMx V1.0.9` entry, then
+`CONNECTED COMx` after connection. With PlexLog installed, the Settings page
+also shows `PLEXLOG: ON`.
 
 ## 3. Scan inverter IDs
 
