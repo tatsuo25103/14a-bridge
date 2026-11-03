@@ -32,6 +32,10 @@ Route the meter channel through the Dual ModBus Box as shown: E-Meter pin 9 to
 RJ45 pin 5 and pin 10 to pin 4; PlexLog pin 4 to RJ45 pin 5 and pin 3 to pin 4.
 Do not connect the PlexLog meter channel to PORT.C.
 
+> [!CAUTION]
+> PlexLog is optional. Use one dedicated SmartPLC for each PlexLog and enable
+> the gateway only after that one-to-one connection is complete.
+
 **Success:** StampPLC starts and displays `V1.0.9`.
 
 ## 2. Connect by USB
@@ -41,8 +45,8 @@ Do not connect the PlexLog meter channel to PORT.C.
 3. Select the new COM port.
 4. Click **Connect**.
 5. Click **Read SmartPLC settings**.
-6. If PlexLog is installed, tick **Enable PlexLog gateway** and wait for
-   `PLEXLOG: ON`.
+6. Only if one PlexLog is installed for this SmartPLC, tick
+   **Enable PlexLog gateway** and wait for `PLEXLOG: ON`.
 
 **Success:** The GUI shows the detected `[SMARTPLC] COMx V1.0.9` entry, then
 `CONNECTED COMx` after connection. With PlexLog installed, the Settings page

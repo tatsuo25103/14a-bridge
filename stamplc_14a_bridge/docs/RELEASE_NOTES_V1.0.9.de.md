@@ -9,7 +9,8 @@
   - StampPLC **PWR485** → P17-Karten / Wechselrichter-IDs `2-7`
 - Option **Enable PlexLog gateway** auf der Settings-Seite. Sie ist nach der
   Schema-5-Migration standardmäßig aktiv und kann gespeichert abgeschaltet
-  werden.
+  werden. PlexLog ist optional; ohne eine feste 1:1-Zuordnung von PlexLog und
+  SmartPLC muss die Option ausgeschaltet bleiben.
 - Separate PlexLog-Diagnose je Wechselrichter-ID sowie Zähler für Weiterleitung,
   Cache, Warteschlange, Zeitüberschreitungen, Ablehnung und maximale Latenz.
 
@@ -32,6 +33,10 @@
   bleibt unverändert.
 
 ## Wichtige Verdrahtungsänderung
+
+> [!CAUTION]
+> Ein PlexLog benötigt eine eigene SmartPLC. Das Gateway erst nach vollständiger
+> 1:1-Verbindung über PORT.C aktivieren.
 
 PlexLog darf nicht mehr parallel mit der SmartPLC am P17-Bus liegen. Der
 PlexLog-Wechselrichterport wird ausschließlich über einen RS485-Wandler mit

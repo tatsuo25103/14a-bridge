@@ -44,6 +44,11 @@ FC03-Rücklesen. Unveränderte Sollwerte werden nicht ständig neu geschrieben.
 
 [Verdrahtungsplan als PDF herunterladen](stamplc_14a_bridge/docs/user_manual_assets/14a_bridge_wiring.pdf)
 
+> [!CAUTION]
+> **OPTIONALE PLEXLOG-FUNKTION: 1 PlexLog benötigt 1 eigene SmartPLC.** Das
+> Gateway erst aktivieren, nachdem genau dieses PlexLog über PORT.C mit der
+> SmartPLC verbunden wurde. Ohne PlexLog bleibt **Enable PlexLog gateway** aus.
+
 > [!IMPORTANT]
 > Dieser Plan ersetzt die frühere vereinfachte Zeichnung. Er zeigt auch die
 > PlexLog-, Dual-ModBus-Box-, Zähler-, Batterie- und P17-Verbindungen. Vor dem
@@ -125,7 +130,7 @@ ist lesend und speichert erst nach ausdrücklichem **Save inverter settings**.
 | **First-time discovery** | Lesender Scan der IDs 2–7; übernimmt gefundene Nennwerte vorläufig in die Tabelle. |
 | **Save inverter settings** | Speichert IDs, PV-Bezugsleistung, geprüfte Wechselrichtergrenze, RS485 und RSE-Profil. Offline-Geräte bleiben `PENDING`; Eingaben gehen nicht verloren. |
 | **Read SmartPLC settings** | Liest die vollständige gespeicherte Konfiguration und den Status neu ein. |
-| **Enable PlexLog gateway** | Aktiviert die getrennte PORT.C-Weiterleitung. Standardmäßig aktiv; nur abschalten, wenn PlexLog nicht über PORT.C geführt wird. |
+| **Enable PlexLog gateway** | Optionale PORT.C-Weiterleitung. Nur einschalten, wenn ein PlexLog physisch mit genau dieser SmartPLC verbunden ist; andernfalls ausgeschaltet lassen. |
 | **Refresh PC Wi-Fi** | Aktualisiert die unter Windows verfügbaren WLAN-Profile. Manuelle SSID-Eingabe bleibt möglich. |
 | **Save connect** | Speichert WLAN-Zugangsdaten in der StampPLC und verbindet. |
 | **Retry connection** | Verwendet die gespeicherten Zugangsdaten erneut. |
@@ -139,13 +144,18 @@ ist lesend und speichert erst nach ausdrücklichem **Save inverter settings**.
 
 ![PlexLog-Gateway in Settings](stamplc_14a_bridge/docs/user_manual_assets/gui_plexlog_gateway.png)
 
+*Das Bild zeigt den aktivierten Zustand einer Anlage mit PlexLog; ohne PlexLog
+bleibt das Kontrollkästchen leer.*
+
 1. SmartPLC per USB verbinden und **Scan** wählen.
 2. Unter **Settings** zuerst **Read SmartPLC settings** wählen.
-3. **Enable PlexLog gateway** markieren. Die Einstellung wird sofort dauerhaft
-   in der SmartPLC gespeichert.
+3. Nur wenn ein PlexLog physisch mit dieser SmartPLC verbunden ist,
+   **Enable PlexLog gateway** markieren. Die Einstellung wird sofort dauerhaft
+   gespeichert.
 4. Warten, bis rechts daneben `PLEXLOG: ON` erscheint. `NOT READ` bedeutet nur,
    dass der Status noch nicht von einer verbundenen SmartPLC gelesen wurde.
-5. Das Gateway nur deaktivieren, wenn kein PlexLog über PORT.C angeschlossen ist.
+5. Ohne PlexLog die Option ausgeschaltet lassen. Eine SmartPLC darf nur das ihr
+   fest zugeordnete PlexLog bedienen (`1 PlexLog : 1 SmartPLC`).
 
 Nach dem Aktivieren muss PlexLog den Wechselrichter wieder erreichen. Ist die
 SmartPLC stromlos, PORT.C falsch verdrahtet oder das Gateway ausgeschaltet,

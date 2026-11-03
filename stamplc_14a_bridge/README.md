@@ -44,6 +44,7 @@ Quick guides are also available separately:
 - one to six compatible inverters using Modbus IDs `2-7`
 - RS485 cable and a USB Type-C data cable
 - Windows 10 or Windows 11 computer for initial configuration
+- optional PlexLog: one dedicated SmartPLC is required for each PlexLog
 
 A 12 V / 1 A supply is sufficient for the StampPLC itself. Use approximately
 2-2.5 A when the same supply also powers interface relays or other equipment.
@@ -118,6 +119,11 @@ two electrically separate buses:
 ![Complete PlexLog, SmartPLC, P17 and Dual ModBus Box wiring](docs/user_manual_assets/system_wiring.png)
 
 [Download the wiring diagram as PDF](docs/user_manual_assets/14a_bridge_wiring.pdf)
+
+> [!CAUTION]
+> **PlexLog is optional and requires a one-to-one pairing: one PlexLog per
+> SmartPLC.** Enable the gateway only after that PlexLog is physically wired to
+> PORT.C. Leave the gateway off on systems without PlexLog.
 
 ```mermaid
 flowchart LR
@@ -283,14 +289,18 @@ continues even when the GUI is closed or USB is disconnected.
 | **First-time discovery** | Read-only scan of IDs 2-7. It presets detected full-power values in the table but does not save them. Use only at LIVE 100% or before the RSE is installed, with all inverters at full power. |
 | **Save inverter settings** | Validates the table, saves enabled IDs, PV power, verified inverter maximum, RS485 settings, and RSE profile to StampPLC NVS. Online units are verified using bounded Modbus write/readback; offline or unsafe rows remain `PENDING` instead of being discarded. |
 | **Read SmartPLC settings** | Reloads the complete saved inverter, RS485, RSE profile, Wi-Fi, clock, firmware, and OTA state from the connected controller. Use this before editing and again after saving. |
-| **Enable PlexLog gateway** | Enables the separate PORT.C proxy. Schema-5 migration enables it by default. Disable it only when PlexLog is not connected through PORT.C. |
+| **Enable PlexLog gateway** | Optional PORT.C proxy. Enable it only when one PlexLog is physically connected to this SmartPLC; otherwise leave it off. |
 
 ![Enable PlexLog gateway in Settings](docs/user_manual_assets/gui_plexlog_gateway.png)
 
-To commission the proxy, connect the controller, click **Read SmartPLC
-settings**, tick **Enable PlexLog gateway**, and wait for `PLEXLOG: ON`. A
-`NOT READ` label only means that the connected controller status has not been
-read yet. The setting is stored persistently in SmartPLC.
+*This screenshot shows the enabled state for a system with PlexLog. Leave the
+checkbox clear when PlexLog is not installed.*
+
+To commission the optional proxy, connect the controller, click **Read
+SmartPLC settings**, and tick **Enable PlexLog gateway** only after its one
+dedicated PlexLog is wired to PORT.C. Wait for `PLEXLOG: ON`. A `NOT READ`
+label only means that the connected controller status has not been read yet.
+The setting is stored persistently in SmartPLC.
 
 The installed PV power may legitimately exceed the inverter rating. The GUI
 keeps that value and marks the cell with a yellow warning. It does not force

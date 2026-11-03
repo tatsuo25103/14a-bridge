@@ -284,7 +284,7 @@ OTA is disabled so the rejected version is not immediately reinstalled.
 | **Save OTA time** | Changes the beginning of the daily 60-minute maintenance window. Keep it in a verified non-daylight period. |
 | **Sync clock from PC** | Sets the onboard RTC. Wi-Fi/NTP later synchronizes it automatically. |
 | **USB flash V1.0.9** | Installs the bundled bootloader, OTA partition layout and firmware, with progress and verification. |
-| **Enable PlexLog gateway** | Enables the separate PORT.C proxy. It defaults to ON; disable it only when PlexLog is not connected through PORT.C. |
+| **Enable PlexLog gateway** | Optional PORT.C proxy. Enable it only when one PlexLog is physically connected to this SmartPLC; otherwise leave it off. |
 | **Check SmartPLC update** | Checks the signed SmartPLC firmware manifest. If a newer version exists, the GUI asks before installation. |
 
 ![Commissioning tab](stamplc_14a_bridge/docs/user_manual_assets/gui_commissioning.png)
@@ -301,6 +301,11 @@ OTA is disabled so the rejected version is not immediately reinstalled.
 ![Complete system wiring](stamplc_14a_bridge/docs/user_manual_assets/system_wiring.png)
 
 [Download the wiring diagram as PDF](stamplc_14a_bridge/docs/user_manual_assets/14a_bridge_wiring.pdf)
+
+> [!CAUTION]
+> **PLEXLOG IS OPTIONAL: one PlexLog requires one dedicated SmartPLC.** Enable
+> the gateway only after that PlexLog is physically connected to PORT.C. Leave
+> **Enable PlexLog gateway** off when PlexLog is not installed.
 
 > [!IMPORTANT]
 > This diagram replaces the former simplified wiring picture. It includes the
@@ -371,12 +376,17 @@ their indicated Dual ModBus Box ports.
 
 ![Enable PlexLog gateway](stamplc_14a_bridge/docs/user_manual_assets/gui_plexlog_gateway.png)
 
+*The screenshot shows the enabled state for a system with PlexLog. Leave the
+checkbox clear when PlexLog is not installed.*
+
 1. Connect SmartPLC by USB and click **Scan**.
 2. On **Settings**, click **Read SmartPLC settings** first.
-3. Tick **Enable PlexLog gateway**. The controller saves the choice immediately.
+3. Only when a PlexLog is physically connected to this SmartPLC, tick
+   **Enable PlexLog gateway**. The controller saves the choice immediately.
 4. Wait for the adjacent status to show `PLEXLOG: ON`. `NOT READ` only means
    that no connected SmartPLC status has been read yet.
-5. Disable the gateway only when PlexLog is not wired through PORT.C.
+5. Leave it off when PlexLog is absent. Each SmartPLC may serve only its
+   dedicated PlexLog (`1 PlexLog : 1 SmartPLC`).
 
 After enabling it, confirm that PlexLog can read the inverter again. A powered-
 off SmartPLC, incorrect PORT.C wiring or a disabled gateway is intentionally

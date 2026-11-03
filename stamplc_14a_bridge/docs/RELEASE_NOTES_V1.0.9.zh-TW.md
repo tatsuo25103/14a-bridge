@@ -8,7 +8,8 @@
     **PORT.C**（`GPIO4/RX`、`GPIO5/TX`）
   - StampPLC **PWR485** → P17 Card／逆變器 ID `2-7`
 - Settings 新增 **Enable PlexLog gateway**。Schema 5 遷移後預設啟用，也可
-  關閉並保存。
+  關閉並保存。PlexLog 是選配功能；沒有一對一配對 PlexLog 的 SmartPLC 必須
+  保持關閉。
 - 每台逆變器有獨立 PlexLog 診斷，並記錄轉送、快取、佇列、逾時、拒絕及
   最大延遲。
 
@@ -26,6 +27,10 @@
   不會立刻增加一次寫入；最多三次寫入的限制維持不變。
 
 ## 必須修改的接線
+
+> [!CAUTION]
+> 1 台 PlexLog 必須搭配 1 台專用 SmartPLC。完成 PORT.C 一對一接線後才能
+> 開啟 Gateway。
 
 PlexLog 不可再與 SmartPLC 並聯在同一條 P17 Bus。PlexLog 的逆變器通訊埠
 只能經由自動方向 RS485 模組接到 PORT.C；PlexLog 的獨立電表通道與

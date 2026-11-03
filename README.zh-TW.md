@@ -38,6 +38,11 @@ StampPLC 讀取 RSE 的無電位繼電器接點，依每台逆變器的 PV 裝�
 
 [下載 PDF 接線圖](stamplc_14a_bridge/docs/user_manual_assets/14a_bridge_wiring.pdf)
 
+> [!CAUTION]
+> **PlexLog 是選配功能：1 台 PlexLog 必須搭配 1 台專用 SmartPLC。**只有確實
+> 把該台 PlexLog 接到這台 SmartPLC 的 PORT.C 後，才能開啟 Gateway；沒有
+> PlexLog 時，請保持 **Enable PlexLog gateway** 關閉。
+
 > [!IMPORTANT]
 > 這張圖取代舊版簡化接線圖，並包含 PlexLog、Dual ModBus Box、電表、電池與
 > P17 的完整路徑。通電前必須依實機再次核對 A/B 及 RJ45 Pin 腳。
@@ -121,7 +126,7 @@ PlexLog 電表通道依新圖改接 Dual ModBus Box，不能接到 PORT.C。
 | **First-time discovery** | 唯讀掃描 ID 2–7，暫時把找到的額定功率填入表格。 |
 | **Save inverter settings** | 保存啟用 ID、PV 基準、已驗證逆變器上限、RS485 與 RSE Profile；離線設備保留為 `PENDING`，不會取消設定。 |
 | **Read SmartPLC settings** | 重新讀取控制器內完整設定及狀態；修改前與保存後都應執行。 |
-| **Enable PlexLog gateway** | 啟用獨立 PORT.C 轉送，預設開啟；只有未透過 PORT.C 使用 PlexLog 時才關閉。 |
+| **Enable PlexLog gateway** | 選配的 PORT.C 轉送。只有一台 PlexLog 確實連接到這台 SmartPLC 時才開啟，沒有 PlexLog 時保持關閉。 |
 | **Refresh PC Wi-Fi** | 更新電腦可取得的 Wi-Fi Profile；仍可手動輸入 SSID。 |
 | **Save connect** | 把 Wi-Fi 帳密保存到 StampPLC 並嘗試連線。 |
 | **Retry connection** | 不修改帳密，重新使用已保存的 Wi-Fi 設定。 |
@@ -135,12 +140,16 @@ PlexLog 電表通道依新圖改接 Dual ModBus Box，不能接到 PORT.C。
 
 ![啟用 PlexLog gateway](stamplc_14a_bridge/docs/user_manual_assets/gui_plexlog_gateway.png)
 
+*截圖顯示的是已安裝 PlexLog 時的啟用狀態；沒有 PlexLog 時不要勾選。*
+
 1. 以 USB 連接 SmartPLC，按 **Scan**。
 2. 在 **Settings** 先按 **Read SmartPLC settings**。
-3. 勾選 **Enable PlexLog gateway**；SmartPLC 會立即永久保存設定。
+3. 只有 PlexLog 已實際接到這台 SmartPLC 時，才勾選
+   **Enable PlexLog gateway**；設定會立即永久保存。
 4. 等右側顯示 `PLEXLOG: ON`。`NOT READ` 只表示尚未從已連線的 SmartPLC
    讀取狀態，不代表功能關閉。
-5. 只有未透過 PORT.C 連接 PlexLog 時才取消勾選。
+5. 沒有 PlexLog 時保持關閉；每台 SmartPLC 只能服務固定配對的一台 PlexLog
+   （`1 台 PlexLog : 1 台 SmartPLC`）。
 
 啟用後要確認 PlexLog 能重新讀到逆變器。SmartPLC 斷電、PORT.C 接錯或關閉
 gateway 時，PlexLog 會如實顯示逆變器通訊中斷。

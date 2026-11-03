@@ -8,7 +8,8 @@
     StampPLC **PORT.C** (`GPIO4/RX`, `GPIO5/TX`)
   - StampPLC **PWR485** → P17 cards / inverter IDs `2-7`
 - **Enable PlexLog gateway** on the Settings page. It defaults to enabled after
-  schema-5 migration and can be persistently disabled.
+  schema-5 migration and can be persistently disabled. PlexLog is optional;
+  systems without one dedicated PlexLog per SmartPLC must leave it disabled.
 - Per-inverter PlexLog diagnostics plus forwarded, cache, queue, expiration,
   rejection and maximum-latency counters.
 
@@ -29,6 +30,10 @@
   write can occur. The three-write-attempt maximum is unchanged.
 
 ## Required wiring change
+
+> [!CAUTION]
+> One PlexLog requires one dedicated SmartPLC. Enable the gateway only after
+> that one-to-one PORT.C connection is complete.
 
 PlexLog must no longer remain in parallel with SmartPLC on the P17 bus. Connect
 the PlexLog inverter port only through an automatic-direction RS485 adapter to

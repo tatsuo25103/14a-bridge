@@ -31,6 +31,10 @@ Master：`B → RJ45 Pin 5`（藍）、`A → Pin 4`（藍白）。
 Pin 4；PlexLog Pin 4 → RJ45 Pin 5、Pin 3 → Pin 4。PlexLog 電表通道不可接
 PORT.C。
 
+> [!CAUTION]
+> PlexLog 是選配功能。每台 PlexLog 必須搭配一台專用 SmartPLC；完成一對一
+> 接線後才能啟用 Gateway。
+
 **成功：** StampPLC 開機並顯示 `V1.0.9`。
 
 ## 2. USB 連線
@@ -40,8 +44,8 @@ PORT.C。
 3. 選擇新出現的 COM。
 4. 按 **Connect**。
 5. 按 **Read SmartPLC settings**。
-6. 有安裝 PlexLog 時，勾選 **Enable PlexLog gateway**，等待顯示
-   `PLEXLOG: ON`。
+6. 只有這台 SmartPLC 已配對一台 PlexLog 時，才勾選
+   **Enable PlexLog gateway**，等待顯示 `PLEXLOG: ON`。
 
 **成功：** GUI 先顯示偵測到的 `[SMARTPLC] COMx V1.0.9`，連線後顯示
 `CONNECTED COMx`；有 PlexLog 時，Settings 也顯示 `PLEXLOG: ON`。
