@@ -61,12 +61,14 @@ for the following equipment:
 > Commission only after every device has at least the firmware below. A later
 > firmware version is acceptable.
 
-| Device | Minimum required firmware |
-|---|---|
-| FSP PowerManager Hybrid 10 kW | `U1: 260226` · `U2: 251229` |
-| FSP PowerManager Hybrid 15 kW | `U1: 250819` · `U2: 250703` |
-| DualBox | `04.4G` |
-| P17 card | `17G` |
+| Device | Minimum required firmware | Download |
+|---|---|---|
+| FSP PowerManager Hybrid 10 kW | `U1: 260226` · `U2: 251229` | [Firmware package](https://github.com/tatsuo25103/14a-bridge/releases/download/v1.0.9/FSP_PowerManager_Hybrid_10kW_U1_260226_U2_251229.rar) |
+| FSP PowerManager Hybrid 15 kW | `U1: 250819` · `U2: 250703` | [Firmware package](https://github.com/tatsuo25103/14a-bridge/releases/download/v1.0.9/FSP_PowerManager_Hybrid_15kW_U1_250819_U2_250703.rar) |
+| DualBox | `04.4G` | [Firmware package](https://github.com/tatsuo25103/14a-bridge/releases/download/v1.0.9/DualBox_04.4G.rar) |
+| P17 card | `17G` | [Firmware package](https://github.com/tatsuo25103/14a-bridge/releases/download/v1.0.9/P17_Card_17G.rar) |
+
+[SHA-256 checksums](docs/VENDOR_FIRMWARE_SHA256.txt)
 
 Compatibility assumes the inverter uses the tested Modbus register map and
 communication settings. Other Modbus RTU models must be verified for register

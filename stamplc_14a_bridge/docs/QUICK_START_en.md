@@ -8,9 +8,10 @@ Complete these seven steps in order to send the RSE `100% / 60% / 30% / 0%` comm
 > Never connect a 230 V RSE output directly to StampPLC. Use a correctly rated interface relay or isolation module. StampPLC digital inputs accept only 5-36 V DC.
 
 > [!IMPORTANT]
-> Required minimum device firmware: 10 kW inverter `U1 260226 / U2 251229`;
-> 15 kW inverter `U1 250819 / U2 250703`; DualBox `04.4G`; P17 card `17G`.
-> Later firmware versions are acceptable.
+> Required minimum device firmware: [10 kW inverter `U1 260226 / U2 251229`](https://github.com/tatsuo25103/14a-bridge/releases/download/v1.0.9/FSP_PowerManager_Hybrid_10kW_U1_260226_U2_251229.rar);
+> [15 kW inverter `U1 250819 / U2 250703`](https://github.com/tatsuo25103/14a-bridge/releases/download/v1.0.9/FSP_PowerManager_Hybrid_15kW_U1_250819_U2_250703.rar);
+> [DualBox `04.4G`](https://github.com/tatsuo25103/14a-bridge/releases/download/v1.0.9/DualBox_04.4G.rar);
+> [P17 card `17G`](https://github.com/tatsuo25103/14a-bridge/releases/download/v1.0.9/P17_Card_17G.rar). Later firmware versions are acceptable.
 
 ## 1. Wire the system
 
