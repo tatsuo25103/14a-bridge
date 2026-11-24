@@ -1,5 +1,7 @@
 # 14a Bridge V1.1.0
 
+**Deutsch (Standard)** · [English](https://github.com/tatsuo25103/14a-bridge/blob/main/stamplc_14a_bridge/docs/RELEASE_NOTES_V1.1.0.md) · [繁體中文](https://github.com/tatsuo25103/14a-bridge/blob/main/stamplc_14a_bridge/docs/RELEASE_NOTES_V1.1.0.zh-TW.md)
+
 ## Neu
 
 - **Winter-/Notbetrieb je Wechselrichter:** Die SmartPLC steuert Register

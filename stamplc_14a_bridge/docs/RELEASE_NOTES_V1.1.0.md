@@ -1,5 +1,7 @@
 # 14a Bridge V1.1.0
 
+[Deutsch (default)](https://github.com/tatsuo25103/14a-bridge/blob/main/stamplc_14a_bridge/docs/RELEASE_NOTES_V1.1.0.de.md) · **English** · [繁體中文](https://github.com/tatsuo25103/14a-bridge/blob/main/stamplc_14a_bridge/docs/RELEASE_NOTES_V1.1.0.zh-TW.md)
+
 ## Added
 
 - **Per-inverter Winter/Emergency Mode:** SmartPLC controls Register `0x0007`

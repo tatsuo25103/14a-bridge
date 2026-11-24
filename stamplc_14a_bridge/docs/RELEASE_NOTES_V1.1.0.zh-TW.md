@@ -1,5 +1,7 @@
 # 14a Bridge V1.1.0
 
+[Deutsch（預設）](https://github.com/tatsuo25103/14a-bridge/blob/main/stamplc_14a_bridge/docs/RELEASE_NOTES_V1.1.0.de.md) · [English](https://github.com/tatsuo25103/14a-bridge/blob/main/stamplc_14a_bridge/docs/RELEASE_NOTES_V1.1.0.md) · **繁體中文**
+
 ## 新增功能
 
 - **每台逆變器獨立的冬季／緊急模式：**SmartPLC 依安全順序控制 Register
