@@ -13,7 +13,7 @@ StampPLC 讀取 RSE 的無電位繼電器接點，依每台逆變器的 PV 裝�
 > 認證，也不能取代當地電網營運商的書面要求、電氣驗收或併網許可。
 
 [下載最新版本](https://github.com/tatsuo25103/14a-bridge/releases/latest)
-· [V1.0.9 版本說明](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.9.zh-TW.md)
+· [V1.1.0 版本說明](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.1.0.zh-TW.md)
 · [完整技術文件（英文）](stamplc_14a_bridge/README.md)
 
 ## 1. 安裝
@@ -38,7 +38,7 @@ StampPLC 讀取 RSE 的無電位繼電器接點，依每台逆變器的 PV 裝�
 ### 1.2 安裝 Windows 程式
 
 1. 從 [GitHub Releases](https://github.com/tatsuo25103/14a-bridge/releases/latest)
-   下載 `14a_Bridge_Setup_V1.0.9.exe`。
+   下載 `14a_Bridge_Setup_V1.1.0.exe`。
 2. 執行安裝程式，可選擇建立桌面捷徑。
 3. 以 USB-C 連接 StampPLC。
 4. 啟動 **14a Bridge – USB Configurator**。
@@ -112,7 +112,7 @@ PlexLog 電表通道依新圖改接 Dual ModBus Box，不能接到 PORT.C。
 
 ### 1.4 第一次裝機
 
-1. 新 StampPLC 在 **Settings** 按 **USB flash V1.0.9**，寫入 Bootloader、
+1. 新 StampPLC 在 **Settings** 按 **USB flash V1.1.0**，寫入 Bootloader、
    OTA 分割區及韌體；過程中不可斷電或拔除 USB。
 2. 按 **Read SmartPLC settings**。
 3. 選擇 RSE Profile；已驗證的 FSP 設備使用 RS485 `19200`、暫存器 `0x04E5`。
@@ -145,7 +145,7 @@ PlexLog 電表通道依新圖改接 Dual ModBus Box，不能接到 PORT.C。
 | **Enable automatic OTA** | 啟用 StampPLC 排程韌體檢查。 |
 | **Save OTA time** | 設定每日 60 分鐘維護時窗的開始時間；預設 Europe/Berlin `01:00`。 |
 | **Sync clock from PC** | 用電腦校正 RTC；連網後每天也會以 NTP 校時。 |
-| **USB flash V1.0.9** | 寫入安裝包內的正式韌體，顯示進度並驗證寫入結果。 |
+| **USB flash V1.1.0** | 寫入安裝包內的正式韌體，顯示進度並驗證寫入結果。 |
 | **Check SmartPLC update** | 檢查簽章韌體；確定有新版時才詢問是否更新。 |
 
 #### 在上位機開啟 PlexLog gateway
@@ -179,6 +179,31 @@ gateway 時，PlexLog 會如實顯示逆變器通訊中斷。
 
 LCD 右上角狀態：**LIVE 綠色**、**TEST 黃色**、**OTA 藍色**。韌體會定期
 唯讀確認逆變器是否恢復，不會頻繁重寫相同限制值。
+
+### 2.3 一般模式與冬季／緊急模式
+
+![上位機的冬季模式畫面](stamplc_14a_bridge/docs/user_manual_assets/winter_mode_gui.png)
+
+| SmartPLC 操作 | 功能 |
+|---|---|
+| **長按 A 五秒** | 對所有已設定且可通訊的逆變器套用一般模式。 |
+| **長按 C 五秒** | 對所有已設定且可通訊的逆變器套用冬季／緊急模式。 |
+| **倒數時按 B** | 取消尚未執行的操作。 |
+| **A+C 長按五秒，B 不可按** | 要求回復上一版韌體；這是獨立的維修功能。 |
+
+一般模式會先停用 AC 充電，再把最大 AC 充電電流設為 3 A。冬季／緊急
+模式會先把每台逆變器的電流設為 100 A，再啟用 AC 充電。每個 Register
+都會先讀取、只有需要時才寫入，最後再次回讀驗證。畫面會分開顯示逆變器
+進度及內部步驟，例如 `INVERTER 1/2 · STEP 1/6`。
+
+每台逆變器的結果彼此獨立：即使某台離線，成功的設備仍保留冬季狀態與
+雪人；再次按相同模式鍵時，只重試尚未成功的部分。離線設備不會被自動
+取消設定，維修完成後可直接重試。
+
+> [!CAUTION]
+> 操作或燒錄前請關閉 SolarPower 及其他會開啟 SmartPLC COM Port 的程式。
+> 程式若以 DTR/RTS 開啟連接埠，可能讓 SmartPLC 重置，看起來像反覆寫入
+> 或重開機。
 
 ## 3. 控制邏輯
 
@@ -279,8 +304,8 @@ OTA 驗證成功後，上一個分割區會綁定其 ELF SHA-256。保持 B 未�
 
 ## 6. 版本
 
-V1.0.9 新增透過 PORT.C 的獨立 PlexLog gateway、通訊優先權仲裁、精確唯讀
-快取及每台逆變器診斷，避免 PlexLog 與 SmartPLC 同時成為 P17 Bus Master。
+V1.1.0 新增以 SmartPLC A、C 鍵操作的一般與冬季／緊急模式、安全的
+Register 寫入順序、每台逆變器進度，以及離線設備的獨立結果與重試。
 完整內容見
-[V1.0.9 版本說明](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.9.zh-TW.md)。
+[V1.1.0 版本說明](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.1.0.zh-TW.md)。
 舊版會繼續保留在 [Releases](https://github.com/tatsuo25103/14a-bridge/releases)。

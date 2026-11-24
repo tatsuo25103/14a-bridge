@@ -21,7 +21,10 @@ The current workstation key is stored in the ignored local directory:
 4. Sign `release/ota_manifest.json` with `tools/sign_ota_manifest.py`.
 5. Verify the packaged manifest and firmware with `tools/verify_ota_release.py`.
 6. Run the GUI self-test and UI self-test.
-7. Build the Windows installer and test a clean installation.
+7. Build `installer/14a_Bridge_Vx.y.z.nsi` with NSIS, then test a clean
+   installation, packaged firmware hash, GUI self-test and uninstall. NSIS is
+   used because its license permits commercial distribution; do not rebuild a
+   customer installer with a compiler marked for non-commercial use only.
 8. Run `git diff --check` and confirm the private key is not tracked.
 
 ## Publish order
@@ -31,6 +34,8 @@ The current workstation key is stored in the ignored local directory:
    - `14a_bridge_firmware.bin`
    - `ota_manifest.json`
    - the Windows installer
+   - `14a_Bridge.exe`
+   - the matching `SHA256SUMS_Vx.y.z.txt`
 3. Confirm both the primary raw-GitHub URL and backup GitHub Release URL return the exact signed firmware size and SHA-256.
 4. USB-flash one test SmartPLC and confirm:
    - saved inverter and Wi-Fi settings remain unchanged;

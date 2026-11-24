@@ -120,7 +120,7 @@ namespace StampPlcRseConfigurator
 
     internal sealed class MainForm : Form
     {
-        private const string ReleaseVersion = "V1.0.9";
+        private const string ReleaseVersion = "V1.1.0";
         private static readonly Color Surface = Color.FromArgb(16, 22, 30);
         private static readonly Color Panel = Color.FromArgb(25, 34, 45);
         private static readonly Color Accent = Color.FromArgb(0, 220, 210);
@@ -157,6 +157,7 @@ namespace StampPlcRseConfigurator
         private readonly TextBox _log = new TextBox();
         private readonly FlowLayoutPanel _gaugeFlow = new FlowLayoutPanel();
         private readonly LiquidGauge[] _gauges = new LiquidGauge[6];
+        private readonly bool[] _winterVerified = new bool[6];
         private readonly bool[] _ratingIssues = new bool[6];
         private readonly bool[] _limitIssues = new bool[6];
         private readonly bool[] _pvOversizeWarnings = new bool[6];
@@ -197,9 +198,12 @@ namespace StampPlcRseConfigurator
             @"^RSE PROFILE[:=]\s*(STRICT_4|WESTNETZ_4|EWE_HOLD_4|FNN_EZA_3)$",
             RegexOptions.IgnoreCase);
         private static readonly Regex OutputPattern = new Regex(
-            @"^Output:\s*(\d+%|UNCHANGED)\s+source:\s*(LIVE|TEST|SAFE|INVALID RSE)$");
+            @"^Output:\s*(\d+%|UNCHANGED)\s+source:\s*(LIVE|TEST|SAFE|WINTER|INVALID RSE)$");
         private static readonly Regex ModePattern = new Regex(
-            @"^Mode:\s*(DRY-RUN|SAFE|TEST|LIVE)\s+RS485:\s*(\d+) baud\s+register:\s*(0x[0-9A-Fa-f]+)\s+quantity:\s*([12])$");
+            @"^Mode:\s*(DRY-RUN|SAFE|TEST|LIVE|WINTER)\s+RS485:\s*(\d+) baud\s+register:\s*(0x[0-9A-Fa-f]+)\s+quantity:\s*([12])$");
+        private static readonly Regex WinterIdPattern = new Regex(
+            @"^WINTER ID=([2-7]) STATE=(NORMAL|WINTER|UNKNOWN|ERROR) STATUS=(OK|ERROR)$",
+            RegexOptions.IgnoreCase);
         private static readonly Regex PlexLogGatewayPattern = new Regex(
             @"^PLEXLOG GATEWAY=(ON|OFF) BAUD=(\d+) RX=(\d+) FORWARDED=(\d+) CACHE=(\d+) QUEUED=(\d+) INVALID=(\d+) DROPPED=(\d+) EXPIRED=(\d+) DOWNFAIL=(\d+) TTLMS=(\d+) QUEUEMS=(\d+)(?: CACHEENTRIES=(\d+) CONTROLTTLMS=(\d+) MAXQ=(\d+) LASTMS=(\d+) MAXMS=(\d+) REJECTED=(\d+) CONTROLHITS=(\d+)(?: RESCUED=(\d+) EXP_ID=(\d+) EXP_FC=(\d+) EXP_ADDR=(\d+) EXP_QTY=(\d+) EXP_AGE=(\d+))?)?$");
         private static readonly Regex PlexLogConfigPattern = new Regex(
@@ -1259,6 +1263,22 @@ namespace StampPlcRseConfigurator
             _flashProgressText.ForeColor = TextColor;
         }
 
+        internal void ShowWinterPreview()
+        {
+            Control[] tabs = Controls.Find("MainTabs", true);
+            if (tabs.Length == 1) ((TabControl)tabs[0]).SelectedIndex = 1;
+            for (int i = 0; i < _gauges.Length; ++i)
+            {
+                bool enabled = i < 4;
+                _winterVerified[i] = enabled && i != 2;
+                _gauges[i].SetState(enabled, i == 0 ? 100 : 60,
+                    i < 2 ? 15000U : 10000U,
+                    i == 0 ? 15000U : (i == 1 ? 9000U :
+                    (i == 2 ? 6000U : 6000U)),
+                    i == 2 ? "ERROR" : "OK", _winterVerified[i]);
+            }
+        }
+
         private void Disconnect()
         {
             _statusTimer.Stop();
@@ -2031,7 +2051,8 @@ namespace StampPlcRseConfigurator
                         _rsePercent = outputPercent;
                 }
                 _result.ForeColor = match.Groups[2].Value == "LIVE" ? Color.FromArgb(56, 211, 159) :
-                    (match.Groups[2].Value == "TEST" ? Color.FromArgb(255, 184, 55) : Color.OrangeRed);
+                    (match.Groups[2].Value == "WINTER" ? Color.FromArgb(80, 225, 235) :
+                    (match.Groups[2].Value == "TEST" ? Color.FromArgb(255, 184, 55) : Color.OrangeRed));
                 UpdateGauges();
                 return;
             }
@@ -2042,9 +2063,24 @@ namespace StampPlcRseConfigurator
                 _mode.Text = "Mode: " + _currentMode;
                 _dryRun = _currentMode == "SAFE" || _currentMode == "DRY-RUN";
                 _mode.ForeColor = _currentMode == "LIVE" ? Color.FromArgb(56, 211, 159) :
-                    (_currentMode == "TEST" ? Color.FromArgb(255, 184, 55) : Color.OrangeRed);
+                    (_currentMode == "WINTER" ? Color.FromArgb(80, 225, 235) :
+                    (_currentMode == "TEST" ? Color.FromArgb(255, 184, 55) : Color.OrangeRed));
                 _baud.Text = match.Groups[2].Value;
                 _register.Text = match.Groups[3].Value.ToUpperInvariant();
+                return;
+            }
+            match = WinterIdPattern.Match(line.Trim());
+            if (match.Success)
+            {
+                int row = FindRowForId(int.Parse(match.Groups[1].Value,
+                    CultureInfo.InvariantCulture));
+                if (row >= 0)
+                {
+                    _winterVerified[row] =
+                        match.Groups[2].Value.Equals("WINTER",
+                            StringComparison.OrdinalIgnoreCase);
+                    UpdateGauges();
+                }
                 return;
             }
             match = PlexLogGatewayPattern.Match(line.Trim());
@@ -2384,7 +2420,8 @@ namespace StampPlcRseConfigurator
                 uint effectiveOutput = EffectiveDisplayedOutput(readback, feedEnabled);
                 string health = Convert.ToString(_grid.Rows[row].Cells["Health"].Value) ?? "--";
                 _gauges[row].SetState(enabled, _rsePercent,
-                    inverterLimit == 0 ? maximum : inverterLimit, effectiveOutput, health);
+                    inverterLimit == 0 ? maximum : inverterLimit,
+                    effectiveOutput, health, _winterVerified[row]);
             }
         }
 
@@ -2457,9 +2494,13 @@ namespace StampPlcRseConfigurator
                    RsePattern.IsMatch("RSE DI mask: 0x00  level: HOLD") &&
                    RseProfilePattern.IsMatch("RSE PROFILE=FNN_EZA_3") &&
                    OutputPattern.IsMatch("Output: 100%  source: TEST") &&
+                   OutputPattern.IsMatch("Output: 60%  source: WINTER") &&
                    OutputPattern.IsMatch("Output: UNCHANGED  source: INVALID RSE") &&
                    ModePattern.IsMatch("Mode: SAFE  RS485: 19200 baud  register: 0x04E5  quantity: 2") &&
                    ModePattern.IsMatch("Mode: TEST  RS485: 19200 baud  register: 0x04E5  quantity: 2") &&
+                   ModePattern.IsMatch("Mode: WINTER  RS485: 19200 baud  register: 0x04E5  quantity: 2") &&
+                   WinterIdPattern.IsMatch("WINTER ID=3 STATE=WINTER STATUS=OK") &&
+                   WinterIdPattern.IsMatch("WINTER ID=5 STATE=ERROR STATUS=ERROR") &&
                    PlexLogGatewayPattern.IsMatch("PLEXLOG GATEWAY=ON BAUD=19200 RX=10 FORWARDED=8 CACHE=2 QUEUED=0 INVALID=0 DROPPED=0 EXPIRED=0 DOWNFAIL=0 TTLMS=5000 QUEUEMS=350") &&
                    PlexLogGatewayPattern.IsMatch("PLEXLOG GATEWAY=ON BAUD=19200 RX=108 FORWARDED=56 CACHE=52 QUEUED=0 INVALID=0 DROPPED=0 EXPIRED=0 DOWNFAIL=0 TTLMS=10000 QUEUEMS=350 CACHEENTRIES=128 CONTROLTTLMS=20000 MAXQ=1 LASTMS=63 MAXMS=81 REJECTED=0 CONTROLHITS=12") &&
                    PlexLogGatewayPattern.IsMatch("PLEXLOG GATEWAY=OFF BAUD=0 RX=0 FORWARDED=0 CACHE=0 QUEUED=0 INVALID=0 DROPPED=0 EXPIRED=0 DOWNFAIL=0 TTLMS=5000 QUEUEMS=350") &&
@@ -2485,7 +2526,8 @@ namespace StampPlcRseConfigurator
                    ParseReleaseVersion("1.0.6") < ParseReleaseVersion(ReleaseVersion) &&
                    ParseReleaseVersion("1.0.7") < ParseReleaseVersion(ReleaseVersion) &&
                    ParseReleaseVersion("1.0.8") < ParseReleaseVersion(ReleaseVersion) &&
-                   ParseReleaseVersion("1.0.9-dev") == ParseReleaseVersion(ReleaseVersion) &&
+                   ParseReleaseVersion("1.0.9-dev") < ParseReleaseVersion(ReleaseVersion) &&
+                   ParseReleaseVersion("1.1.0") == ParseReleaseVersion(ReleaseVersion) &&
                    RseConfigPattern.IsMatch(
                        "RSECFG ID=3 P100=15000 F100=yes P60=10800 F60=yes P30=5400 F30=yes P0=0 F0=no") &&
                    RseConfigStatusPattern.IsMatch(
@@ -2573,6 +2615,8 @@ namespace StampPlcRseConfigurator
         private float _targetPercent;
         private float _displayCommandPercent;
         private float _phase;
+        private bool _winterVerified;
+        private float _winterAmount;
 
         internal LiquidGauge(int id)
         {
@@ -2590,13 +2634,16 @@ namespace StampPlcRseConfigurator
             Invalidate();
         }
 
-        internal void SetState(bool enabled, int commandPercent, uint maximumWatts, uint readbackWatts, string health)
+        internal void SetState(bool enabled, int commandPercent,
+            uint maximumWatts, uint readbackWatts, string health,
+            bool winterVerified)
         {
             Visible = enabled;
             _commandPercent = Math.Max(0, Math.Min(100, commandPercent));
             _maximumWatts = maximumWatts;
             _readbackWatts = readbackWatts;
             _health = health;
+            _winterVerified = winterVerified;
             _targetPercent = maximumWatts == 0 ? 0 : Math.Min(100F, readbackWatts * 100F / maximumWatts);
         }
 
@@ -2607,6 +2654,10 @@ namespace StampPlcRseConfigurator
             _displayCommandPercent += (_commandPercent - _displayCommandPercent) * 0.14F;
             if (Math.Abs(_commandPercent - _displayCommandPercent) < 0.1F)
                 _displayCommandPercent = _commandPercent;
+            float winterTarget = _winterVerified ? 1F : 0F;
+            _winterAmount += (winterTarget - _winterAmount) * 0.11F;
+            if (Math.Abs(winterTarget - _winterAmount) < 0.01F)
+                _winterAmount = winterTarget;
             _phase += 0.13F;
             Invalidate();
         }
@@ -2650,6 +2701,8 @@ namespace StampPlcRseConfigurator
                 e.Graphics.ResetClip();
                 e.Graphics.DrawPath(border, path);
             }
+            if (!fault && _winterAmount > 0.02F)
+                DrawWinterSnowman(e.Graphics, box, _winterAmount, _phase);
             float commandY = box.Bottom - 3 - (box.Height - 6) * _displayCommandPercent / 100F;
             using (Pen dash = new Pen(Color.White, 1.4F) { DashPattern = new float[] { 4, 3 } })
                 e.Graphics.DrawLine(dash, box.Left + 4, commandY, box.Right - 4, commandY);
@@ -2660,7 +2713,10 @@ namespace StampPlcRseConfigurator
             using (SolidBrush white = new SolidBrush(Color.White))
             using (SolidBrush muted = new SolidBrush(Color.FromArgb(160, 190, 205)))
             {
-                e.Graphics.DrawString("ID " + _id, idFont, white, new RectangleF(box.Left, box.Top + 7, box.Width, 16), center);
+                float textWidth = box.Width - 34F * _winterAmount;
+                RectangleF idArea = new RectangleF(box.Left, box.Top + 7,
+                    textWidth, 16);
+                e.Graphics.DrawString("ID " + _id, idFont, white, idArea, center);
                 if (fault)
                 {
                     using (Font faultFont = new Font("Segoe UI Semibold", 16F))
@@ -2669,11 +2725,95 @@ namespace StampPlcRseConfigurator
                 }
                 else
                 {
-                    e.Graphics.DrawString("R: " + _commandPercent + "%", small, muted, new RectangleF(box.Left, box.Top + 28, box.Width, 14), center);
-                    e.Graphics.DrawString(FormatKw(_readbackWatts), valueFont, white, new RectangleF(box.Left, box.Top + 47, box.Width, 27), center);
-                    e.Graphics.DrawString(_health, small, Brushes.LightGray, new RectangleF(box.Left, box.Bottom - 18, box.Width, 13), center);
+                    e.Graphics.DrawString("R: " + _commandPercent + "%", small,
+                        muted, new RectangleF(box.Left, box.Top + 28, textWidth, 14), center);
+                    e.Graphics.DrawString(FormatKw(_readbackWatts), valueFont,
+                        white, new RectangleF(box.Left, box.Top + 47, textWidth, 27), center);
+                    e.Graphics.DrawString(_health, small, Brushes.LightGray,
+                        new RectangleF(box.Left, box.Bottom - 18, textWidth, 13), center);
                 }
             }
+        }
+
+        private static void DrawWinterSnowman(Graphics graphics, Rectangle box,
+            float visibility, float phase)
+        {
+            GraphicsState saved = graphics.Save();
+            graphics.SetClip(box);
+            float scale = Math.Max(0.2F, Math.Min(1F, visibility));
+            float baseX = box.Right - 21F;
+            float baseY = box.Bottom - 7F;
+            float bodyShift = (float)Math.Sin(phase * 0.55F) * 1.2F;
+            float headShift = (float)Math.Sin(phase * 0.55F + 1.1F) * 1.6F;
+            float hatShift = (float)Math.Sin(phase * 0.55F + 2.0F) * 2.0F;
+            float lowerR = 13F * scale;
+            float middleR = 10F * scale;
+            float headR = 8F * scale;
+            float lowerX = baseX + bodyShift;
+            float lowerY = baseY - lowerR;
+            float middleX = baseX - bodyShift * 0.45F;
+            float middleY = lowerY - lowerR - middleR + 5F;
+            float headX = baseX + headShift;
+            float headY = middleY - middleR - headR + 4F;
+
+            using (SolidBrush shadow = new SolidBrush(Color.FromArgb(90, 0, 94, 120)))
+            using (SolidBrush snow = new SolidBrush(Color.FromArgb(238, 250, 255)))
+            using (Pen ice = new Pen(Color.FromArgb(80, 225, 235), 1.35F))
+            using (Pen twig = new Pen(Color.FromArgb(176, 120, 70), 1.6F))
+            using (Pen noseOutline = new Pen(Color.FromArgb(105, 62, 20), 1.1F))
+            using (SolidBrush dark = new SolidBrush(Color.FromArgb(13, 35, 47)))
+            using (SolidBrush carrot = new SolidBrush(Color.FromArgb(255, 165, 55)))
+            using (SolidBrush scarf = new SolidBrush(Color.FromArgb(20, 220, 205)))
+            {
+                graphics.FillEllipse(shadow, lowerX - lowerR - 2F, baseY - 4F,
+                    lowerR * 2F + 6F, 7F);
+                DrawSnowball(graphics, snow, ice, lowerX, lowerY, lowerR);
+                DrawSnowball(graphics, snow, ice, middleX, middleY, middleR);
+                DrawSnowball(graphics, snow, ice, headX, headY, headR);
+
+                graphics.DrawLine(twig, middleX - middleR + 1F, middleY - 1F,
+                    middleX - middleR - 8F, middleY - 7F);
+                graphics.DrawLine(twig, middleX + middleR - 1F, middleY - 1F,
+                    middleX + middleR + 8F, middleY - 8F);
+
+                graphics.FillRectangle(scarf, middleX - middleR + 1F,
+                    middleY - middleR + 1F, middleR * 2F - 2F, 4F);
+                graphics.FillRectangle(scarf, middleX + middleR - 2F,
+                    middleY - middleR + 4F, 5F, 10F);
+                graphics.FillEllipse(dark, middleX - 1.5F, middleY - 3F, 3F, 3F);
+                graphics.FillEllipse(dark, middleX - 1.5F, middleY + 3F, 3F, 3F);
+
+                float eyeY = headY - 2F;
+                graphics.FillEllipse(dark, headX - 4.5F, eyeY, 2.5F, 2.5F);
+                graphics.FillEllipse(dark, headX + 2F, eyeY, 2.5F, 2.5F);
+                PointF[] nose = {
+                    new PointF(headX + 1F, headY),
+                    new PointF(headX - 14F, headY + 3F),
+                    new PointF(headX + 1F, headY + 6F)
+                };
+                graphics.FillPolygon(carrot, nose);
+                graphics.DrawPolygon(noseOutline, nose);
+
+                float hatX = headX + hatShift;
+                float brimY = headY - headR + 1F;
+                graphics.FillRectangle(scarf, hatX - headR - 3F,
+                    brimY - 1F, headR * 2F + 6F, 4F);
+                using (SolidBrush hat = new SolidBrush(Color.FromArgb(12, 44, 62)))
+                {
+                    graphics.FillRectangle(hat, hatX - 6F, brimY - 11F, 12F, 11F);
+                    graphics.DrawRectangle(ice, hatX - 6F, brimY - 11F, 12F, 11F);
+                }
+            }
+            graphics.Restore(saved);
+        }
+
+        private static void DrawSnowball(Graphics graphics, Brush fill, Pen outline,
+            float centerX, float centerY, float radius)
+        {
+            graphics.FillEllipse(fill, centerX - radius, centerY - radius,
+                radius * 2F, radius * 2F);
+            graphics.DrawEllipse(outline, centerX - radius, centerY - radius,
+                radius * 2F, radius * 2F);
         }
 
         private static Color LevelColor(float percent)
@@ -2738,7 +2878,7 @@ namespace StampPlcRseConfigurator
                 return 0;
             }
             if (args.Length == 2 && (args[0] == "--render-ui" || args[0] == "--render-ui-debug" ||
-                args[0] == "--render-flash-progress"))
+                args[0] == "--render-flash-progress" || args[0] == "--render-winter-preview"))
             {
                 using (var form = new MainForm())
                 {
@@ -2760,6 +2900,16 @@ namespace StampPlcRseConfigurator
                     {
                         form.ShowFlashProgressPreview();
                         Application.DoEvents();
+                    }
+                    if (args[0] == "--render-winter-preview")
+                    {
+                        form.ShowWinterPreview();
+                        DateTime winterReady = DateTime.UtcNow.AddSeconds(2);
+                        while (DateTime.UtcNow < winterReady)
+                        {
+                            Application.DoEvents();
+                            Thread.Sleep(25);
+                        }
                     }
                     using (var bitmap = new Bitmap(form.Width, form.Height))
                     {

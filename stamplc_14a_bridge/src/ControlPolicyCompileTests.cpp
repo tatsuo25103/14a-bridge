@@ -176,20 +176,26 @@ static_assert(deadlineReached(0x00000010U, 0xFFFFFFF0U),
 static_assert(!deadlineReached(0xFFFFFFF0U, 0x00000010U),
               "future deadline across millis wrap");
 
-static_assert(mayValidateInverterRating(false, false, 100),
+static_assert(mayValidateInverterRating(false, false, 100, 0x01),
               "LIVE physical 100% permits validation");
-static_assert(!mayValidateInverterRating(true, false, 100),
+static_assert(mayValidateInverterRating(false, false, RSE_INVALID, 0x00),
+              "all DI open permits first-install validation");
+static_assert(!mayValidateInverterRating(true, false, 100, 0x01),
               "SAFE cannot validate");
-static_assert(!mayValidateInverterRating(false, true, 100),
+static_assert(!mayValidateInverterRating(true, false, RSE_INVALID, 0x00),
+              "SAFE blocks all-DI-open validation");
+static_assert(!mayValidateInverterRating(false, true, 100, 0x01),
               "TEST cannot validate");
-static_assert(!mayValidateInverterRating(false, false, 60),
+static_assert(!mayValidateInverterRating(false, false, 60, 0x02),
               "60% cannot validate");
-static_assert(!mayValidateInverterRating(false, false, 30),
+static_assert(!mayValidateInverterRating(false, false, 30, 0x04),
               "30% cannot validate");
-static_assert(!mayValidateInverterRating(false, false, 0),
+static_assert(!mayValidateInverterRating(false, false, 0, 0x08),
               "0% cannot validate");
-static_assert(!mayValidateInverterRating(false, false, -1),
-              "invalid RSE cannot validate");
+static_assert(!mayValidateInverterRating(false, false, RSE_INVALID, 0x03),
+              "multiple active contacts cannot validate");
+static_assert(!mayValidateInverterRating(false, false, RSE_INVALID, 0x10),
+              "unknown non-DI mask bits cannot imitate all-open DI");
 
 static_assert(shouldDisplayInverter(true),
               "every configured inverter must have a display tile");

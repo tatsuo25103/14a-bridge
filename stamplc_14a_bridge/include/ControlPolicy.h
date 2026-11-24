@@ -139,8 +139,13 @@ constexpr bool deadlineReached(uint32_t now, uint32_t deadline) {
 }
 
 constexpr bool mayValidateInverterRating(bool dryRun, bool manualTest,
-                                         int16_t physicalRsePercent) {
-    return !dryRun && !manualTest && physicalRsePercent == 100;
+                                         int16_t physicalRsePercent,
+                                         uint8_t physicalRseMask) {
+    // Initial commissioning is also permitted before the RSE receiver is
+    // installed (all four DI inputs open). Other invalid/multi-contact states
+    // remain blocked so an ambiguous live RSE command can never be relaxed.
+    return !dryRun && !manualTest &&
+           (physicalRsePercent == 100 || physicalRseMask == 0);
 }
 
 constexpr bool shouldDisplayInverter(bool configuredEnabled) {

@@ -269,6 +269,33 @@ with all enabled inverters verified at target. Missing, stale or overwritten
 backups are rejected without reboot. After a successful rollback, automatic
 OTA is disabled so the rejected version is not immediately reinstalled.
 
+### Normal and Winter/Emergency mode
+
+![Winter mode in the PC application](stamplc_14a_bridge/docs/user_manual_assets/winter_mode_gui.png)
+
+| SmartPLC control | Result |
+|---|---|
+| **Hold A for five seconds** | Applies Normal mode to every configured and reachable inverter. |
+| **Hold C for five seconds** | Applies Winter/Emergency mode to every configured and reachable inverter. |
+| **Press B during the countdown** | Cancels the pending action. |
+| **Hold A+C for five seconds with B released** | Requests local firmware rollback; this is a separate service function. |
+
+Normal mode disables AC charging first, then sets the maximum AC charging
+current to 3 A. Winter/Emergency mode sets 100 A per inverter first, then
+enables AC charging. Every register is read before a necessary write and read
+again for verification. The overlay reports both inverter progress and the
+internal step, for example `INVERTER 1/2 · STEP 1/6`.
+
+Results are tracked per inverter. A successful unit keeps its snowman and
+Winter state even if another configured unit is offline; pressing the same
+mode key retries only the unsuccessful part. An offline unit remains in the
+saved configuration and is never silently removed.
+
+> [!CAUTION]
+> Close SolarPower and any other application that opens the SmartPLC COM port
+> before operating or flashing it. Opening the port with DTR/RTS may reset the
+> SmartPLC and look like repeated writes or reboots.
+
 ## Quick start
 
 1. Install the latest Windows package from [Releases](https://github.com/tatsuo25103/14a-bridge/releases/latest).
@@ -296,7 +323,7 @@ OTA is disabled so the rejected version is not immediately reinstalled.
 | **Enable automatic OTA** | Enables the scheduled SmartPLC firmware check. The default maintenance window is 01:00-01:59 Europe/Berlin. |
 | **Save OTA time** | Changes the beginning of the daily 60-minute maintenance window. Keep it in a verified non-daylight period. |
 | **Sync clock from PC** | Sets the onboard RTC. Wi-Fi/NTP later synchronizes it automatically. |
-| **USB flash V1.0.9** | Installs the bundled bootloader, OTA partition layout and firmware, with progress and verification. |
+| **USB flash V1.1.0** | Installs the bundled bootloader, OTA partition layout and firmware, with progress and verification. |
 | **Enable PlexLog gateway** | Optional PORT.C proxy. Enable it only when one PlexLog is physically connected to this SmartPLC; otherwise leave it off. |
 | **Check SmartPLC update** | Checks the signed SmartPLC firmware manifest. If a newer version exists, the GUI asks before installation. |
 
@@ -412,6 +439,7 @@ list only the functions added, changed or corrected in that version so an
 installer can quickly identify the operational impact.
 
 See [all releases](https://github.com/tatsuo25103/14a-bridge/releases), the
+[V1.1.0 release notes](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.1.0.md), the
 [V1.0.9 release notes](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.9.md), the
 [V1.0.8 release notes](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.8.md), the
 [V1.0.7 release notes](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.7.md) and the

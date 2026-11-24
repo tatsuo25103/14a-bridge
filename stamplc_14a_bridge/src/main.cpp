@@ -50,10 +50,20 @@ constexpr uint32_t MODBUS_DEVICE_GAP_MS = 500;
 constexpr uint32_t DISPLAY_FRAME_MS = 33;
 constexpr uint32_t MANUAL_TEST_TIMEOUT_MS = 5UL * 60UL * 1000UL;
 constexpr uint32_t MANUAL_ROLLBACK_HOLD_MS = 5000;
+constexpr uint32_t WINTER_MODE_HOLD_MS = 5000;
+constexpr uint32_t WINTER_VISUAL_TRANSITION_MS = 1400;
 constexpr uint16_t FEED_PERMISSION_REGISTER = 0x0007;
 constexpr uint16_t FEED_PERMISSION_BIT = 0x2000;
 constexpr uint16_t FEED_PERMISSION_ENABLE_COMMAND = 0x2000;
 constexpr uint16_t FEED_PERMISSION_DISABLE_COMMAND = 0xDFFF;
+constexpr uint16_t AC_CHARGE_CONTROL_REGISTER = 0x0007;
+constexpr uint16_t AC_CHARGE_ENABLE_BIT = 0x4000;
+constexpr uint16_t AC_CHARGE_ENABLE_COMMAND = 0x4000;
+constexpr uint16_t AC_CHARGE_DISABLE_COMMAND = 0xBFFF;
+constexpr uint16_t AC_CHARGE_CURRENT_REGISTER = 0x011F;
+constexpr uint16_t NORMAL_AC_CHARGE_CURRENT = 30;    // 3.0 A, unit 0.1 A
+constexpr uint16_t WINTER_AC_CHARGE_CURRENT = 1000;  // 100.0 A per inverter
+constexpr uint8_t AC_CHARGE_BIT_VERIFY_RETRIES = 5;
 constexpr uint32_t PLEXLOG_BACKGROUND_QUIET_MS = 120;
 constexpr uint32_t PLEXLOG_FORWARD_TIMEOUT_MAX_MS = 450;
 
@@ -102,11 +112,35 @@ bool watchdogSubscribed = false;
 bool controlReapplyRequired = false;
 uint32_t lastCriticalInputPollAt = 0;
 bool manualRollbackHoldActive = false;
-bool manualRollbackGestureBlocked = false;
+// Never accept a button that was already held while the controller booted.
+// All three buttons must be observed released once before either long-hold
+// gesture is armed.
+bool manualRollbackGestureBlocked = true;
 uint32_t manualRollbackHoldStartedAt = 0;
 String manualRollbackTargetVersion;
 String manualRollbackNotice;
 uint32_t manualRollbackNoticeUntil = 0;
+bool winterModeActive = false;
+bool winterModePreference = false;
+enum class InverterAcMode : uint8_t { Unknown, Normal, Winter, Error };
+InverterAcMode inverterAcMode[INVERTER_COUNT] = {};
+float displayedWinterAmount[INVERTER_COUNT] = {};
+bool winterModeHoldActive = false;
+bool winterModeGestureBlocked = true;
+bool winterModeApplying = false;
+bool winterModeHoldTarget = false;
+bool winterModeApplyTarget = false;
+uint8_t winterModeApplySlaveId = 0;
+String winterModeApplyDetail;
+uint32_t winterModeHoldStartedAt = 0;
+uint8_t winterModeApplyProgress = 0;
+uint8_t winterModeApplyTotal = 0;
+uint8_t winterModeApplyDeviceProgress = 0;
+uint8_t winterModeApplyDeviceTotal = 0;
+int8_t winterVisualTransition = 0;  // 1 entering, -1 exiting, 0 steady
+uint32_t winterVisualTransitionStartedAt = 0;
+String winterModeNotice;
+uint32_t winterModeNoticeUntil = 0;
 
 void updateDisplay(bool force = false);
 void responsiveDelay(uint32_t durationMs);
@@ -118,6 +152,10 @@ void startInverterControl();
 void returnToPhysicalRse(const String& reason);
 bool safeForFirmwareUpdate();
 void serviceManualRollbackGesture();
+bool applyWinterMode(bool enable, const String& reason, bool persist = true);
+bool controlEnabled(uint8_t index);
+void showWinterModeNotice(const String& message, uint32_t durationMs = 3000);
+void recordSystem(const String& event, const String& result);
 
 uint32_t plexlogForwardTimeoutMs() {
     return min<uint32_t>(config.responseTimeoutMs,
@@ -256,16 +294,31 @@ void serviceManualRollbackGesture() {
         manualRollbackNotice = "";
         updateDisplay(true);
     }
+    if (!winterModeNotice.isEmpty() &&
+        static_cast<int32_t>(millis() - winterModeNoticeUntil) >= 0) {
+        winterModeNotice = "";
+        updateDisplay(true);
+    }
 
     const bool aPressed = M5StamPLC.BtnA.isPressed();
     const bool bPressed = M5StamPLC.BtnB.isPressed();
     const bool cPressed = M5StamPLC.BtnC.isPressed();
 
-    // B cancels and locks the gesture until all three buttons are released.
-    // This makes A+B+C, or pressing B midway, incapable of causing rollback.
+    // A selects Normal, C selects Winter, and A+C remains the independent
+    // firmware rollback gesture. B is a deliberate cancel key for all holds.
     if (bPressed) {
         manualRollbackHoldActive = false;
         manualRollbackGestureBlocked = true;
+        if (winterModeHoldActive) showWinterModeNotice("MODE HOLD CANCELLED");
+        winterModeHoldActive = false;
+        winterModeHoldStartedAt = 0;
+        winterModeGestureBlocked = true;
+        return;
+    }
+
+    if (winterModeGestureBlocked) {
+        if (!aPressed && !bPressed && !cPressed)
+            winterModeGestureBlocked = false;
         return;
     }
     if (manualRollbackGestureBlocked) {
@@ -273,9 +326,41 @@ void serviceManualRollbackGesture() {
             manualRollbackGestureBlocked = false;
         return;
     }
-    if (otaBootValidationPending || applyInProgress || !otaDisplayStage.isEmpty()) {
+    if (otaBootValidationPending || applyInProgress || winterModeApplying ||
+        !otaDisplayStage.isEmpty()) {
         manualRollbackHoldActive = false;
         return;
+    }
+
+    const bool singleModeButton = aPressed != cPressed;
+    if (singleModeButton) {
+        manualRollbackHoldActive = false;
+        if (!inverterControlStarted || manualTestActive) {
+            winterModeHoldActive = false;
+            winterModeGestureBlocked = true;
+            showWinterModeNotice("MODE CHANGE BUSY");
+            return;
+        }
+        const bool requestedWinter = cPressed;
+        if (!winterModeHoldActive || winterModeHoldTarget != requestedWinter) {
+            winterModeHoldActive = true;
+            winterModeHoldTarget = requestedWinter;
+            winterModeHoldStartedAt = millis();
+            updateDisplay(true);
+            return;
+        }
+        if (millis() - winterModeHoldStartedAt >= WINTER_MODE_HOLD_MS) {
+            winterModeHoldActive = false;
+            winterModeGestureBlocked = true;
+            applyWinterMode(requestedWinter,
+                            requestedWinter ? "button_c" : "button_a", true);
+        }
+        return;
+    }
+    if (winterModeHoldActive) {
+        winterModeHoldActive = false;
+        winterModeHoldStartedAt = 0;
+        updateDisplay(true);
     }
 
     if (!(aPressed && cPressed)) {
@@ -347,11 +432,35 @@ void rollbackToPreviousApp(uint8_t previousSubtype, const String& reason) {
 }
 
 void prepareOtaBootValidation() {
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    esp_ota_img_states_t runningState = ESP_OTA_IMG_UNDEFINED;
+    const bool bootloaderValidationPending = running &&
+        esp_ota_get_state_partition(running, &runningState) == ESP_OK &&
+        runningState == ESP_OTA_IMG_PENDING_VERIFY;
     Preferences p;
-    if (!p.begin("bridgeboot", false)) return;
+    if (!p.begin("bridgeboot", false)) {
+        if (bootloaderValidationPending) {
+            otaBootValidationPending = true;
+            otaBootValidationDeadline = millis() + 15000;
+            Serial.println("OTA BOOT STATUS=PENDING_VERIFY SOURCE=USB VERSION=" +
+                           String(APP_VERSION));
+        }
+        return;
+    }
     const String target = p.getString("target", "");
     if (target != APP_VERSION) {
         p.end();
+        // A direct USB/esptool installation has no bridgeboot NVS record, but
+        // the ESP32 rollback bootloader can still mark its first boot as
+        // PENDING_VERIFY. Run the same delayed self-test and explicitly accept
+        // the image; otherwise the next power cycle can silently return to an
+        // unrelated image left in the other OTA slot.
+        if (bootloaderValidationPending) {
+            otaBootValidationPending = true;
+            otaBootValidationDeadline = millis() + 15000;
+            Serial.println("OTA BOOT STATUS=PENDING_VERIFY SOURCE=USB VERSION=" +
+                           String(APP_VERSION));
+        }
         return;
     }
     const uint8_t previousSubtype = p.getUChar("previous", 0xFF);
@@ -456,6 +565,10 @@ void startInverterControl() {
     // until the new application has passed its rollback self-test.
     probeEnabledInverters("startup_probe");
     handleStableRseState(stableRseMask, "initial_state");
+    if (!config.dryRun)
+        applyWinterMode(winterModePreference, "startup_restore", false);
+    else
+        winterModeActive = false;
     inverterControlStarted = true;
 }
 
@@ -600,6 +713,340 @@ ModbusResult setFeedPermission(uint8_t index, bool enabled, uint8_t retries,
         inverterFeedEnabled[index] = enabled;
     }
     return result;
+}
+
+void loadWinterModePreference() {
+    Preferences preferences;
+    if (!preferences.begin("bridge_mode", false)) {
+        winterModePreference = false;
+        return;
+    }
+    winterModePreference = preferences.getBool("winter", false);
+    preferences.end();
+}
+
+bool saveWinterModePreference(bool enabled) {
+    Preferences preferences;
+    if (!preferences.begin("bridge_mode", false)) return false;
+    const bool saved = preferences.putBool("winter", enabled) == 1;
+    preferences.end();
+    if (saved) winterModePreference = enabled;
+    return saved;
+}
+
+void showWinterModeNotice(const String& message, uint32_t durationMs) {
+    winterModeNotice = message;
+    winterModeNoticeUntil = millis() + durationMs;
+    updateDisplay(true);
+}
+
+ModbusResult setAcChargeEnabled(uint8_t index, bool enabled,
+                               bool allowSafeDisableAfterReadFailure = false) {
+    const uint8_t slaveId = slaveIdForIndex(index);
+    ModbusResult current = modbus.readRaw(
+        slaveId, AC_CHARGE_CONTROL_REGISTER, 1, config.responseTimeoutMs);
+    if (current.ok) {
+        plexlogGateway.publishVerifiedHolding(
+            slaveId, AC_CHARGE_CONTROL_REGISTER, 1, current.value);
+        const bool currentlyEnabled =
+            (current.value & AC_CHARGE_ENABLE_BIT) != 0;
+        if (currentlyEnabled == enabled) {
+            current.detail = "AC charge already " +
+                String(enabled ? "enabled" : "disabled") +
+                "; Register 0x0007 write skipped";
+            return current;
+        }
+    } else if (enabled || !allowSafeDisableAfterReadFailure) {
+        current.detail = "AC charge state unreadable; no Register 0x0007 write: " +
+                         current.detail;
+        return current;
+    }
+
+    ModbusResult result = modbus.writeBitCommandAndVerify(
+        slaveId, AC_CHARGE_CONTROL_REGISTER,
+        enabled ? AC_CHARGE_ENABLE_COMMAND : AC_CHARGE_DISABLE_COMMAND,
+        AC_CHARGE_ENABLE_BIT, enabled, config.responseTimeoutMs,
+        AC_CHARGE_BIT_VERIFY_RETRIES);
+    if (result.ok) {
+        plexlogGateway.publishVerifiedHolding(
+            slaveId, AC_CHARGE_CONTROL_REGISTER, 1, result.value);
+    }
+    return result;
+}
+
+ModbusResult setAcChargeCurrent(uint8_t index, uint16_t value) {
+    const uint8_t slaveId = slaveIdForIndex(index);
+    ModbusResult current = modbus.readRaw(
+        slaveId, AC_CHARGE_CURRENT_REGISTER, 1, config.responseTimeoutMs);
+    if (current.ok) {
+        plexlogGateway.publishVerifiedHolding(
+            slaveId, AC_CHARGE_CURRENT_REGISTER, 1, current.value);
+        if (current.value == value) {
+            current.detail = "AC charge current already " + String(value) +
+                             "; Register 0x011F write skipped";
+            return current;
+        }
+    }
+
+    ModbusResult result = modbus.writeAndVerify(
+        slaveId, AC_CHARGE_CURRENT_REGISTER, 1, value,
+        config.responseTimeoutMs, config.verifyRetries);
+    if (result.ok) {
+        plexlogGateway.publishVerifiedHolding(
+            slaveId, AC_CHARGE_CURRENT_REGISTER, 1, result.value);
+    }
+    return result;
+}
+
+bool forceSafeNormalMode(const String& reason) {
+    bool allSafe = true;
+    for (uint8_t i = 0; i < INVERTER_COUNT; ++i) {
+        if (!controlEnabled(i)) continue;
+        const uint8_t slaveId = slaveIdForIndex(i);
+        // Failure recovery is the only path that may send the safe disable
+        // command after an unreadable 0x0007 value. Enabling is never guessed.
+        ModbusResult disabled = setAcChargeEnabled(i, false, true);
+        ModbusResult current;
+        if (disabled.ok)
+            current = setAcChargeCurrent(i, NORMAL_AC_CHARGE_CURRENT);
+        else
+            current.detail = "current write blocked because AC charge disable was not verified";
+        allSafe = allSafe && disabled.ok && current.ok;
+        Serial.printf(
+            "WINTER FAILSAFE ID=%u DISABLE=%s CURRENT=%s DETAIL=%s; %s\r\n",
+            slaveId, disabled.ok ? "OK" : "ERROR",
+            current.ok ? "OK" : "ERROR", disabled.detail.c_str(),
+            current.detail.c_str());
+        eventLog.append(timestampNow(), reason, stableRseMask, activePercent,
+                        slaveId, config.inverters[i].maxPvPowerW,
+                        NORMAL_AC_CHARGE_CURRENT,
+                        current.ok ? current.value : 0,
+                        "AC disable " + String(disabled.ok ? "verified" : "FAILED") +
+                            "; current " + String(current.ok ? "verified" : "FAILED"));
+        responsiveDelay(MODBUS_DEVICE_GAP_MS);
+    }
+    return allSafe;
+}
+
+bool applyWinterMode(bool enable, const String& reason, bool persist) {
+    const bool startupRestore = reason == "startup_restore";
+    if (winterModeApplying || applyInProgress || !otaDisplayStage.isEmpty()) {
+        lastResult = "Winter Mode change rejected: controller busy";
+        return false;
+    }
+    if (config.dryRun) {
+        lastResult = "Winter Mode change rejected: SAFE LOCK is active";
+        showWinterModeNotice("SAFE LOCK - NO CHANGE");
+        Serial.println("WINTER STATUS=REJECTED DETAIL=SAFE LOCK is active");
+        return false;
+    }
+
+    uint8_t enabledCount = 0;
+    for (uint8_t i = 0; i < INVERTER_COUNT; ++i) {
+        if (!config.inverters[i].enabled) continue;
+        if (!config.inverters[i].ratingVerified) {
+            lastResult = "Winter Mode change rejected: inverter ID " +
+                         String(slaveIdForIndex(i)) + " setup is pending";
+            showWinterModeNotice("PENDING INVERTER SETUP");
+            Serial.printf("WINTER STATUS=REJECTED ID=%u DETAIL=rating not verified\r\n",
+                          slaveIdForIndex(i));
+            return false;
+        }
+        ++enabledCount;
+    }
+    if (enabledCount == 0) {
+        lastResult = "Winter Mode change rejected: no enabled inverter";
+        showWinterModeNotice("NO ENABLED INVERTER");
+        Serial.println("WINTER STATUS=REJECTED DETAIL=no enabled inverter");
+        return false;
+    }
+
+    winterModeApplying = true;
+    winterModeApplyTarget = enable;
+    winterModeApplyProgress = 0;
+    // Read + two possible verified changes for each inverter.
+    winterModeApplyTotal = enabledCount * 3;
+    winterModeApplyDeviceProgress = 0;
+    winterModeApplyDeviceTotal = enabledCount;
+    lastResult = enable ? "Applying Winter Mode" : "Applying Normal Mode";
+    plexlogGateway.setControlBusy(true);
+    modbus.begin(config.modbusBaud);
+    updateDisplay(true);
+
+    uint8_t successCount = 0;
+    uint8_t failureCount = 0;
+    for (uint8_t i = 0; i < INVERTER_COUNT; ++i) {
+        if (!controlEnabled(i)) continue;
+        ++winterModeApplyDeviceProgress;
+        const uint8_t slaveId = slaveIdForIndex(i);
+        winterModeApplySlaveId = slaveId;
+        winterModeApplyDetail = "READ REG 7 + 287";
+        updateDisplay(true);
+
+        ModbusResult control = modbus.readRaw(
+            slaveId, AC_CHARGE_CONTROL_REGISTER, 1, config.responseTimeoutMs);
+        ModbusResult current = modbus.readRaw(
+            slaveId, AC_CHARGE_CURRENT_REGISTER, 1, config.responseTimeoutMs);
+        if (control.ok)
+            plexlogGateway.publishVerifiedHolding(
+                slaveId, AC_CHARGE_CONTROL_REGISTER, 1, control.value);
+        if (current.ok)
+            plexlogGateway.publishVerifiedHolding(
+                slaveId, AC_CHARGE_CURRENT_REGISTER, 1, current.value);
+        ++winterModeApplyProgress;
+        updateDisplay(true);
+
+        if (!control.ok || !current.ok) {
+            inverterAcMode[i] = InverterAcMode::Error;
+            ++failureCount;
+            Serial.printf("WINTER ID=%u STATE=ERROR STATUS=READ_FAILED\r\n",
+                          slaveId);
+            // Account for both skipped write stages in the visible progress.
+            winterModeApplyProgress += 2;
+            updateDisplay(true);
+            responsiveDelay(MODBUS_DEVICE_GAP_MS);
+            continue;
+        }
+
+        const bool chargeEnabled =
+            (control.value & AC_CHARGE_ENABLE_BIT) != 0;
+        inverterAcMode[i] =
+            chargeEnabled && current.value == WINTER_AC_CHARGE_CURRENT
+                ? InverterAcMode::Winter
+                : ((!chargeEnabled &&
+                    current.value == NORMAL_AC_CHARGE_CURRENT)
+                       ? InverterAcMode::Normal
+                       : InverterAcMode::Unknown);
+        const bool alreadyTarget = enable
+            ? (chargeEnabled && current.value == WINTER_AC_CHARGE_CURRENT)
+            : (!chargeEnabled && current.value == NORMAL_AC_CHARGE_CURRENT);
+        bool deviceOk = alreadyTarget;
+
+        if (alreadyTarget) {
+            winterModeApplyDetail = enable ? "WINTER ALREADY VERIFIED"
+                                           : "NORMAL ALREADY VERIFIED";
+            winterModeApplyProgress += 2;
+            updateDisplay(true);
+        } else if (enable) {
+            // Set the current ceiling before enabling AC charge.
+            winterModeApplyDetail = "SET 100.0A LIMIT";
+            updateDisplay(true);
+            ModbusResult setCurrent =
+                setAcChargeCurrent(i, WINTER_AC_CHARGE_CURRENT);
+            ++winterModeApplyProgress;
+            updateDisplay(true);
+            responsiveDelay(MODBUS_DEVICE_GAP_MS);
+
+            ModbusResult setEnable;
+            if (setCurrent.ok) {
+                winterModeApplyDetail = "ENABLE AC CHARGE";
+                updateDisplay(true);
+                setEnable = setAcChargeEnabled(i, true);
+            } else {
+                setEnable.detail = "blocked because 100.0A was not verified";
+            }
+            ++winterModeApplyProgress;
+            updateDisplay(true);
+            deviceOk = setCurrent.ok && setEnable.ok;
+
+            if (!deviceOk) {
+                // Recover only the inverter that failed. Other verified
+                // inverters remain in Winter Mode and keep their snowman.
+                winterModeApplyDetail = "FAILED - RESTORE THIS ID";
+                updateDisplay(true);
+                ModbusResult disabled = setAcChargeEnabled(i, false, true);
+                ModbusResult safeCurrent;
+                if (disabled.ok)
+                    safeCurrent =
+                        setAcChargeCurrent(i, NORMAL_AC_CHARGE_CURRENT);
+                if (disabled.ok && safeCurrent.ok)
+                    inverterAcMode[i] = InverterAcMode::Normal;
+                else
+                    inverterAcMode[i] = InverterAcMode::Error;
+            }
+        } else {
+            // Disable AC charge before lowering the current ceiling.
+            winterModeApplyDetail = "DISABLE AC CHARGE";
+            updateDisplay(true);
+            ModbusResult disabled = setAcChargeEnabled(i, false, true);
+            ++winterModeApplyProgress;
+            updateDisplay(true);
+            responsiveDelay(MODBUS_DEVICE_GAP_MS);
+
+            ModbusResult setCurrent;
+            if (disabled.ok) {
+                winterModeApplyDetail = "SET 3.0A LIMIT";
+                updateDisplay(true);
+                setCurrent =
+                    setAcChargeCurrent(i, NORMAL_AC_CHARGE_CURRENT);
+            } else {
+                setCurrent.detail = "blocked because AC disable was not verified";
+            }
+            ++winterModeApplyProgress;
+            updateDisplay(true);
+            deviceOk = disabled.ok && setCurrent.ok;
+        }
+
+        if (deviceOk) {
+            inverterAcMode[i] =
+                enable ? InverterAcMode::Winter : InverterAcMode::Normal;
+            ++successCount;
+            Serial.printf("WINTER ID=%u STATE=%s STATUS=OK\r\n", slaveId,
+                          enable ? "WINTER" : "NORMAL");
+        } else {
+            if (!enable && inverterAcMode[i] != InverterAcMode::Winter)
+                inverterAcMode[i] = InverterAcMode::Error;
+            ++failureCount;
+            Serial.printf("WINTER ID=%u STATE=%s STATUS=ERROR\r\n", slaveId,
+                          inverterAcMode[i] == InverterAcMode::Winter
+                              ? "WINTER" : "ERROR");
+        }
+        responsiveDelay(MODBUS_DEVICE_GAP_MS);
+    }
+
+    uint8_t winterCount = 0;
+    for (uint8_t i = 0; i < INVERTER_COUNT; ++i)
+        if (controlEnabled(i) &&
+            inverterAcMode[i] == InverterAcMode::Winter) ++winterCount;
+    winterModeActive = winterCount > 0;
+    winterVisualTransition = 0;
+    winterVisualTransitionStartedAt = millis();
+    const bool saved = !persist || saveWinterModePreference(enable);
+    const bool allOk = failureCount == 0 && successCount == enabledCount;
+
+    if (allOk) {
+        lastResult = String(enable ? "Winter Mode" : "Normal Mode") +
+                     " verified on " + String(successCount) + " inverter(s)";
+        showWinterModeNotice(
+            String(enable ? "WINTER" : "NORMAL") +
+                (saved ? " MODE VERIFIED" : " OK - SAVE ERROR"),
+            saved ? 3000 : 5000);
+        recordSystem(enable ? "winter_mode_on" : "winter_mode_off", lastResult);
+        M5StamPLC.tone(enable ? 1300 : 900, 180);
+    } else {
+        lastResult = String(enable ? "Winter" : "Normal") + " Mode " +
+                     String(successCount) + "/" + String(enabledCount) +
+                     " verified; press " + String(enable ? "C" : "A") +
+                     " to retry failed inverter(s)";
+        showWinterModeNotice(
+            String("PARTIAL ") + String(successCount) + "/" +
+                String(enabledCount) + " - RETRY " +
+                String(enable ? "C" : "A"),
+            5000);
+        recordSystem("winter_mode_partial", lastResult);
+        M5StamPLC.tone(1900, 450);
+    }
+
+    winterModeApplying = false;
+    winterModeApplyProgress = 0;
+    winterModeApplyTotal = 0;
+    winterModeApplyDeviceProgress = 0;
+    winterModeApplyDeviceTotal = 0;
+    winterModeApplySlaveId = 0;
+    winterModeApplyDetail = "";
+    plexlogGateway.setControlBusy(false);
+    updateDisplay(true);
+    return allOk;
 }
 
 bool controlEnabled(uint8_t index) {
@@ -846,10 +1293,20 @@ void handleStableRseState(uint8_t mask, const String& reason) {
 
 const char* controlModeText() {
     if (manualTestActive) return "TEST";
+    if (winterModeActive) return "WINTER";
     // Kept only as a legacy commissioning safety lock. Normal customer
     // operation uses LIVE, TEST, and the dedicated OTA screen.
     if (config.dryRun) return "SAFE";
     return "LIVE";
+}
+
+const char* inverterAcModeText(InverterAcMode mode) {
+    switch (mode) {
+        case InverterAcMode::Normal: return "NORMAL";
+        case InverterAcMode::Winter: return "WINTER";
+        case InverterAcMode::Error: return "ERROR";
+        default: return "UNKNOWN";
+    }
 }
 
 void returnToPhysicalRse(const String& reason) {
@@ -968,6 +1425,7 @@ bool enabledInvertersReadyForOta() {
 }
 
 bool safeForFirmwareUpdate() {
+    if (winterModeActive || winterModeApplying) return false;
     const uint8_t physicalMask = readRseMask();
     const bool stable = physicalMask == rawRseMask &&
         physicalMask == stableRseMask &&
@@ -1077,6 +1535,8 @@ void printHelp() {
     Serial.println("  time <YYYY-MM-DD HH:MM:SS>    Set the onboard RTC");
     Serial.println("  test <100|60|30|0>            Test level (safe in dry-run)");
     Serial.println("  test <level> CONFIRM          Test level when live");
+    Serial.println("  winter status                Show Normal/Winter AC-charge mode");
+    Serial.println("  winter <on|off> CONFIRM      Apply and verify mode on every enabled ID");
     Serial.println("  apply                         Reapply current RSE level in dry-run");
     Serial.println("  apply CONFIRM                 Reapply current RSE level when live");
     Serial.println("  baud <rate>                  Set RS485 baud rate");
@@ -1094,6 +1554,8 @@ void printHelp() {
 #if defined(OTA_FAULT_TEST)
     Serial.println("  rollback test CONFIRM         Test-only: invoke verified rollback path");
 #endif
+    Serial.println("  Hold A for 5 seconds          Apply and verify Normal mode (B cancels)");
+    Serial.println("  Hold C for 5 seconds          Apply and verify Winter mode (B cancels)");
     Serial.println("  Hold A+C for 5 seconds        Boot verified previous firmware (B cancels)");
     Serial.println("  reset CONFIRM                Erase saved configuration and reboot");
     Serial.println("  help                         Show this help");
@@ -1140,6 +1602,11 @@ void printStatus() {
                   controlModeText(),
                   config.modbusBaud, config.modbusRegister,
                   config.modbusQuantity);
+    Serial.printf("Winter Mode: %s  AC charge current: %u (0.1A/unit)  saved: %s\r\n",
+                  winterModeActive ? "ON" : "OFF",
+                  winterModeActive ? WINTER_AC_CHARGE_CURRENT
+                                   : NORMAL_AC_CHARGE_CURRENT,
+                  winterModePreference ? "ON" : "OFF");
     plexlogGateway.printStatus(Serial);
     Serial.printf("Firmware: %s  WiFi saved: %s connected: %s auto OTA: %s IP: %s RSSI: %ld\r\n",
                   APP_VERSION, otaManager.hasCredentials() ? "yes" : "no",
@@ -1202,6 +1669,19 @@ void printGuiStatus() {
     Serial.printf("@ Mode: %s  RS485: %lu baud  register: 0x%04X  quantity: %u\r\n",
                   controlModeText(), config.modbusBaud,
                   config.modbusRegister, config.modbusQuantity);
+    Serial.printf("@ WINTER MODE=%s CURRENT=%u SAVED=%s APPLYING=%s\r\n",
+                  winterModeActive ? "ON" : "OFF",
+                  winterModeActive ? WINTER_AC_CHARGE_CURRENT
+                                   : NORMAL_AC_CHARGE_CURRENT,
+                  winterModePreference ? "ON" : "OFF",
+                  winterModeApplying ? "yes" : "no");
+    for (uint8_t i = 0; i < INVERTER_COUNT; ++i) {
+        if (!config.inverters[i].enabled) continue;
+        Serial.printf("@ WINTER ID=%u STATE=%s STATUS=%s\r\n",
+                      slaveIdForIndex(i), inverterAcModeText(inverterAcMode[i]),
+                      inverterAcMode[i] == InverterAcMode::Error
+                          ? "ERROR" : "OK");
+    }
     Serial.print("@ ");
     plexlogGateway.printStatus(Serial);
     Serial.printf("@ WIFI VERSION=%s SAVED=%s CONNECTED=%s AUTO=%s SSIDHEX=%s IP=%s RSSI=%ld\r\n",
@@ -1274,6 +1754,46 @@ void processUsbCommand(String line) {
     }
     if (line.equalsIgnoreCase("gui")) {
         printGuiStatus();
+        return;
+    }
+    if (line.equalsIgnoreCase("winter status")) {
+        Serial.printf("WINTER MODE=%s CURRENT=%u SAVED=%s APPLYING=%s\r\n",
+                      winterModeActive ? "ON" : "OFF",
+                      winterModeActive ? WINTER_AC_CHARGE_CURRENT
+                                       : NORMAL_AC_CHARGE_CURRENT,
+                      winterModePreference ? "ON" : "OFF",
+                      winterModeApplying ? "yes" : "no");
+        for (uint8_t i = 0; i < INVERTER_COUNT; ++i) {
+            if (!config.inverters[i].enabled) continue;
+            Serial.printf("WINTER ID=%u STATE=%s STATUS=%s\r\n",
+                          slaveIdForIndex(i),
+                          inverterAcModeText(inverterAcMode[i]),
+                          inverterAcMode[i] == InverterAcMode::Error
+                              ? "ERROR" : "OK");
+        }
+        return;
+    }
+    if (line.equalsIgnoreCase("winter on CONFIRM") ||
+        line.equalsIgnoreCase("winter off CONFIRM")) {
+        if (manualTestActive) {
+            Serial.println("WINTER STATUS=REJECTED DETAIL=return to LIVE before changing mode");
+            return;
+        }
+        const bool requested = line.equalsIgnoreCase("winter on CONFIRM");
+        const bool ok = applyWinterMode(requested, "usb_winter_mode", true);
+        Serial.printf("WINTER STATUS=%s MODE=%s DETAIL=%s\r\n",
+                      ok ? "OK" : "ERROR", requested ? "ON" : "OFF",
+                      lastResult.c_str());
+        return;
+    }
+
+    const bool inverterConfigurationMutation =
+        line.startsWith("commit ") || line.startsWith("id ") ||
+        line.startsWith("max ") || line.startsWith("limit ") ||
+        line.startsWith("rsecfg ") || line.startsWith("baud ") ||
+        line.startsWith("reg ") || line.startsWith("rse profile ");
+    if (winterModeActive && inverterConfigurationMutation) {
+        Serial.println("ERROR switch to Normal Mode before changing inverter configuration");
         return;
     }
 
@@ -1546,7 +2066,7 @@ void processUsbCommand(String line) {
 
         const uint8_t physicalMask = readRseMask();
         if (!mayValidateInverterRating(config.dryRun, manualTestActive,
-                                       decodePercent(physicalMask))) {
+                                       decodePercent(physicalMask), physicalMask)) {
             config.inverters[index].enabled = true;
             config.inverters[index].maxPvPowerW = commitWatts;
             config.inverters[index].inverterLimitW = 0;
@@ -1557,7 +2077,7 @@ void processUsbCommand(String line) {
                               commitId, originalConfig.maxPvPowerW);
                 return;
             }
-            Serial.printf("COMMIT ID=%d STATUS=PENDING CONFIG=%lu DETAIL=setting saved but excluded from control; rating validation requires LIVE with physical RSE at 100%%\r\n",
+            Serial.printf("COMMIT ID=%d STATUS=PENDING CONFIG=%lu DETAIL=setting saved but excluded from control; rating validation requires LIVE with physical RSE at 100%% or all DI open\r\n",
                           commitId, commitWatts);
             return;
         }
@@ -1603,9 +2123,12 @@ void processUsbCommand(String line) {
             }
             return restored.ok;
         };
-        if (decodePercent(readRseMask()) != 100 || manualTestActive || config.dryRun) {
+        const uint8_t validationMask = readRseMask();
+        if (!mayValidateInverterRating(config.dryRun, manualTestActive,
+                                       decodePercent(validationMask),
+                                       validationMask)) {
             const bool restored = restorePreviousRegister();
-            Serial.printf("COMMIT ID=%d STATUS=ERROR CONFIG=%lu DETAIL=physical RSE left LIVE 100%% during validation; candidate rejected; previous register %s\r\n",
+            Serial.printf("COMMIT ID=%d STATUS=ERROR CONFIG=%lu DETAIL=physical RSE left the permitted 100%%/all-DI-open commissioning state; candidate rejected; previous register %s\r\n",
                           commitId, originalConfig.maxPvPowerW,
                           restored ? "restored" : "restore failed");
             returnToPhysicalRse("rating_validation_rse_changed");
@@ -1837,11 +2360,19 @@ void processUsbCommand(String line) {
     }
 
     if (line.equalsIgnoreCase("reset CONFIRM")) {
+        if (winterModeActive || winterModeApplying) {
+            Serial.println("ERROR switch to Normal Mode before resetting configuration");
+            return;
+        }
         Preferences p;
         if (p.begin("rsebridge", false)) {
             const bool cleared = p.clear();
             p.end();
             if (cleared) {
+                if (p.begin("bridge_mode", false)) {
+                    p.clear();
+                    p.end();
+                }
                 Serial.println("OK configuration cleared; rebooting");
                 delay(250);
                 ESP.restart();
@@ -2025,6 +2556,98 @@ void drawLiquidFill(M5Canvas& canvas, int16_t x, int16_t y, int16_t width,
     }
 }
 
+float winterVisualAmount(uint32_t now) {
+    if (winterVisualTransition == 0) return winterModeActive ? 1.0f : 0.0f;
+    const uint32_t elapsed = now - winterVisualTransitionStartedAt;
+    if (elapsed >= WINTER_VISUAL_TRANSITION_MS) {
+        winterVisualTransition = 0;
+        return winterModeActive ? 1.0f : 0.0f;
+    }
+    const float progress = static_cast<float>(elapsed) /
+                           WINTER_VISUAL_TRANSITION_MS;
+    return winterVisualTransition > 0 ? progress : 1.0f - progress;
+}
+
+void drawWinterSnowman(M5Canvas& canvas, int16_t x, int16_t y,
+                       int16_t width, int16_t height, uint8_t inverterIndex,
+                       uint32_t now, float visibility) {
+    if (visibility <= 0.02f || width < 32 || height < 30) return;
+    const int16_t fullHeight = min<int16_t>(
+        static_cast<int16_t>(height * 0.62f),
+        static_cast<int16_t>(width * 0.43f));
+    const int16_t snowHeight = max<int16_t>(14,
+        static_cast<int16_t>(fullHeight * visibility));
+    const int16_t lowerRadius = max<int16_t>(4, snowHeight * 20 / 100);
+    const int16_t middleRadius = max<int16_t>(3, snowHeight * 16 / 100);
+    const int16_t headRadius = max<int16_t>(3, snowHeight * 14 / 100);
+    const float phase = now * 0.0031f + inverterIndex * 0.83f;
+    // The body, head and hat move independently, but only by a few pixels so
+    // the figure feels alive without appearing to fall apart.
+    const int16_t bodyShift = static_cast<int16_t>(sinf(phase) * 1.4f);
+    const int16_t headShift = static_cast<int16_t>(sinf(phase + 1.1f) * 1.8f);
+    const int16_t hatShift = static_cast<int16_t>(sinf(phase + 2.0f) * 2.4f);
+    const int16_t hatLift = static_cast<int16_t>(sinf(phase * 1.25f) * 1.2f);
+
+    const int16_t centerBase = x + width - lowerRadius - 7;
+    const int16_t baseY = y + height - 5;
+    const int16_t lowerX = centerBase + bodyShift;
+    const int16_t lowerY = baseY - lowerRadius;
+    const int16_t middleX = centerBase - bodyShift / 2;
+    const int16_t middleY = lowerY - lowerRadius - middleRadius + 3;
+    const int16_t headX = centerBase + headShift;
+    const int16_t headY = middleY - middleRadius - headRadius + 3;
+
+    // Soft cyan shadow anchors the snowman in the liquid gauge.
+    canvas.fillEllipse(lowerX + 2, baseY - 1,
+                       lowerRadius + 3, max<int16_t>(1, lowerRadius / 3),
+                       COLOR_NAVY);
+    canvas.fillCircle(lowerX, lowerY, lowerRadius, TFT_WHITE);
+    canvas.drawCircle(lowerX, lowerY, lowerRadius, COLOR_CYAN);
+    canvas.fillCircle(middleX, middleY, middleRadius, TFT_WHITE);
+    canvas.drawCircle(middleX, middleY, middleRadius, COLOR_CYAN);
+    canvas.fillCircle(headX, headY, headRadius, TFT_WHITE);
+    canvas.drawCircle(headX, headY, headRadius, COLOR_CYAN);
+
+    // Twig arms, scarf and buttons add a recognisable silhouette even on the
+    // smallest six-inverter tile.
+    const int16_t armY = middleY - 1;
+    canvas.drawLine(middleX - middleRadius + 1, armY,
+                    middleX - middleRadius - 5, armY - 4, COLOR_AMBER);
+    canvas.drawLine(middleX + middleRadius - 1, armY,
+                    middleX + middleRadius + 5, armY - 5, COLOR_AMBER);
+    canvas.drawLine(middleX - middleRadius + 1, middleY - middleRadius + 2,
+                    middleX + middleRadius - 1, middleY - middleRadius + 2,
+                    COLOR_CYAN);
+    canvas.fillRect(middleX + middleRadius - 1,
+                    middleY - middleRadius + 2, 3,
+                    max<int16_t>(3, middleRadius / 2), COLOR_CYAN);
+    canvas.fillCircle(middleX, middleY - 1, 1, TFT_BLACK);
+    canvas.fillCircle(middleX, middleY + 3, 1, TFT_BLACK);
+
+    const int16_t eyeY = headY - max<int16_t>(1, headRadius / 4);
+    const int16_t eyeGap = max<int16_t>(1, headRadius / 3);
+    canvas.fillCircle(headX - eyeGap, eyeY, 1, TFT_BLACK);
+    canvas.fillCircle(headX + eyeGap, eyeY, 1, TFT_BLACK);
+    const int16_t noseTipX = headX - headRadius - 7;
+    canvas.fillTriangle(headX + 1, headY - 1, noseTipX, headY + 1,
+                        headX + 1, headY + 3, COLOR_AMBER);
+    canvas.drawLine(headX + 1, headY - 1, noseTipX, headY + 1, TFT_BLACK);
+    canvas.drawLine(headX + 1, headY + 3, noseTipX, headY + 1, TFT_BLACK);
+
+    const int16_t brimY = headY - headRadius + hatLift;
+    const int16_t hatCenterX = headX + hatShift;
+    canvas.fillRoundRect(hatCenterX - headRadius - 2, brimY - 1,
+                         headRadius * 2 + 5, 3, 1, COLOR_CYAN);
+    canvas.fillRoundRect(hatCenterX - max<int16_t>(3, headRadius * 2 / 3),
+                         brimY - max<int16_t>(4, headRadius),
+                         max<int16_t>(6, headRadius * 4 / 3),
+                         max<int16_t>(4, headRadius), 1, COLOR_NAVY);
+    canvas.drawRoundRect(hatCenterX - max<int16_t>(3, headRadius * 2 / 3),
+                         brimY - max<int16_t>(4, headRadius),
+                         max<int16_t>(6, headRadius * 4 / 3),
+                         max<int16_t>(4, headRadius), 1, COLOR_CYAN);
+}
+
 void updateDisplay(bool force) {
     const uint32_t now = millis();
     if (!force && now - lastDisplayAt < DISPLAY_FRAME_MS) return;
@@ -2048,6 +2671,102 @@ void updateDisplay(bool force) {
 
     const int16_t screenW = ui.width();
     const int16_t screenH = ui.height();
+
+    if (winterModeHoldActive) {
+        ui.fillScreen(TFT_BLACK);
+        ui.fillRect(0, 0, screenW, 22, COLOR_CYAN);
+        ui.setTextDatum(middle_center);
+        ui.setTextColor(TFT_BLACK);
+        ui.setTextSize(1);
+        ui.drawString("NORMAL / WINTER MODE", screenW / 2, 11);
+
+        const uint32_t elapsed = millis() - winterModeHoldStartedAt;
+        const uint32_t remainingMs = elapsed >= WINTER_MODE_HOLD_MS
+            ? 0 : WINTER_MODE_HOLD_MS - elapsed;
+        const uint8_t remainingSeconds =
+            static_cast<uint8_t>((remainingMs + 999) / 1000);
+        const float progress = constrain(
+            static_cast<float>(elapsed) / WINTER_MODE_HOLD_MS, 0.0f, 1.0f);
+        const int16_t centerX = screenW / 2;
+        const int16_t centerY = 70;
+        constexpr int16_t ringOuter = 30;
+        constexpr int16_t ringInner = 24;
+        ui.drawCircle(centerX, centerY, ringOuter + 3, COLOR_NAVY);
+        ui.drawCircle(centerX, centerY, ringOuter + 1, COLOR_CYAN);
+        const uint8_t segments = static_cast<uint8_t>(progress * 32.0f);
+        for (uint8_t segment = 0; segment < segments; ++segment) {
+            const float angle = -PI / 2.0f + segment * (2.0f * PI / 32.0f);
+            const int16_t x1 = centerX + static_cast<int16_t>(
+                cosf(angle) * ringInner);
+            const int16_t y1 = centerY + static_cast<int16_t>(
+                sinf(angle) * ringInner);
+            const int16_t x2 = centerX + static_cast<int16_t>(
+                cosf(angle) * ringOuter);
+            const int16_t y2 = centerY + static_cast<int16_t>(
+                sinf(angle) * ringOuter);
+            ui.drawLine(x1, y1, x2, y2, COLOR_CYAN);
+        }
+        ui.setTextColor(TFT_WHITE);
+        ui.setTextSize(3);
+        ui.drawString(String(remainingSeconds), centerX, centerY);
+        ui.setTextSize(1);
+        ui.setTextColor(COLOR_CYAN);
+        ui.drawString(winterModeHoldTarget ? "TARGET WINTER" : "TARGET NORMAL",
+                      centerX, 108);
+        ui.setTextColor(COLOR_MUTED);
+        ui.drawString(winterModeHoldTarget ? "HOLD C - B CANCELS"
+                                          : "HOLD A - B CANCELS",
+                      centerX, screenH - 7);
+        ui.pushSprite(0, 0);
+        return;
+    }
+
+    if (winterModeApplying) {
+        ui.fillScreen(TFT_BLACK);
+        ui.fillRect(0, 0, screenW, 22, COLOR_CYAN);
+        ui.setTextDatum(middle_center);
+        ui.setTextColor(TFT_BLACK);
+        ui.setTextSize(1);
+        ui.drawString(winterModeApplyTarget ? "APPLYING WINTER"
+                                           : "APPLYING NORMAL",
+                      screenW / 2, 11);
+
+        // A moving scanner keeps the screen visibly alive even while a
+        // Modbus transaction is waiting for its verified readback.
+        const int16_t scannerX =
+            static_cast<int16_t>((millis() / 7U) % max<int16_t>(1, screenW));
+        ui.fillRect(0, 24, screenW, 2, COLOR_NAVY);
+        ui.fillRect(max<int16_t>(0, scannerX - 10), 24, 20, 2, COLOR_CYAN);
+
+        ui.setTextColor(TFT_WHITE);
+        ui.setTextSize(2);
+        ui.drawString("ID" + String(winterModeApplySlaveId), screenW / 2, 47);
+        ui.setTextSize(1);
+        ui.setTextColor(COLOR_CYAN);
+        ui.drawString(winterModeApplyDetail, screenW / 2, 70);
+
+        constexpr int16_t barX = 26;
+        constexpr int16_t barY = 89;
+        const int16_t barW = screenW - barX * 2;
+        ui.drawRoundRect(barX, barY, barW, 12, 6, COLOR_CYAN);
+        const float progress = winterModeApplyTotal == 0 ? 0.0f :
+            constrain(static_cast<float>(winterModeApplyProgress) /
+                          winterModeApplyTotal, 0.0f, 1.0f);
+        const int16_t fillW = static_cast<int16_t>((barW - 4) * progress);
+        if (fillW > 0)
+            ui.fillRoundRect(barX + 2, barY + 2, fillW, 8, 4, COLOR_CYAN);
+        ui.setTextColor(TFT_WHITE);
+        ui.drawString("INVERTER " + String(winterModeApplyDeviceProgress) +
+                          "/" + String(winterModeApplyDeviceTotal) +
+                          "  STEP " + String(winterModeApplyProgress) +
+                          "/" + String(winterModeApplyTotal),
+                      screenW / 2, 116);
+        ui.setTextColor(COLOR_MUTED);
+        ui.drawString("WRITING + READING BACK", screenW / 2, screenH - 7);
+        ui.setTextDatum(top_left);
+        ui.pushSprite(0, 0);
+        return;
+    }
 
     if (manualRollbackHoldActive || !manualRollbackNotice.isEmpty()) {
         ui.fillScreen(TFT_BLACK);
@@ -2192,8 +2911,17 @@ void updateDisplay(bool force) {
     ui.drawString("kW", 91, 9);
     ui.setTextDatum(middle_right);
     ui.drawString("v" APP_VERSION, screenW - 55, 9);
+    for (uint8_t i = 0; i < INVERTER_COUNT; ++i) {
+        const float targetWinter =
+            inverterAcMode[i] == InverterAcMode::Winter ? 1.0f : 0.0f;
+        const float difference = targetWinter - displayedWinterAmount[i];
+        displayedWinterAmount[i] += difference * min(0.30f, animationElapsed / 260.0f);
+        if (fabsf(difference) < 0.02f)
+            displayedWinterAmount[i] = targetWinter;
+    }
     const uint16_t modeColor = manualTestActive ? COLOR_AMBER :
-                               (config.dryRun ? COLOR_RED : COLOR_GREEN);
+                               (config.dryRun ? COLOR_RED :
+                                (winterModeActive ? COLOR_CYAN : COLOR_GREEN));
     ui.fillRoundRect(screenW - 48, 1, 44, 16, 4, modeColor);
     ui.setTextDatum(middle_center);
     ui.setTextColor(TFT_BLACK);
@@ -2366,6 +3094,12 @@ void updateDisplay(bool force) {
                                controlFault ? TFT_RED : liquidCommandColor,
                                inverterIndex, now);
             }
+            const float winterVisibility =
+                displayedWinterAmount[inverterIndex];
+            if (winterVisibility > 0.02f) {
+                drawWinterSnowman(ui, x, y, drawW, drawH, inverterIndex,
+                                  now, winterVisibility);
+            }
             ui.drawRoundRect(x, y, drawW, drawH, radius,
                              tileFault ? TFT_RED
                                  : ((pending || transientFailure || !hasReadback)
@@ -2382,7 +3116,9 @@ void updateDisplay(bool force) {
 
             if (!hasRoomForText) continue;
 
-            const int16_t centerX = x + drawW / 2;
+            const int16_t winterTextShift = static_cast<int16_t>(
+                min<int16_t>(14, drawW / 6) * winterVisibility);
+            const int16_t centerX = x + drawW / 2 - winterTextShift;
             const uint32_t animatedInvWatts = displayedInvWatts[inverterIndex];
             char invNumber[10];
             if (confirmedFault) snprintf(invNumber, sizeof(invNumber), "ERR");
@@ -2428,10 +3164,18 @@ void updateDisplay(bool force) {
     ui.setTextDatum(middle_left);
     ui.setTextColor(COLOR_MUTED);
     char leftFooter[20];
-    if (applyInProgress)
+    if (winterModeApplying)
+        snprintf(leftFooter, sizeof(leftFooter), "MODE %u/%u",
+                 winterModeApplyProgress, winterModeApplyTotal);
+    else if (!winterModeNotice.isEmpty())
+        snprintf(leftFooter, sizeof(leftFooter), "%.18s",
+                 winterModeNotice.c_str());
+    else if (applyInProgress)
         snprintf(leftFooter, sizeof(leftFooter), "SYNC %u/%u", applyProgress, applyTotal);
     else if (pendingCount > 0)
         snprintf(leftFooter, sizeof(leftFooter), "PEND %u", pendingCount);
+    else if (winterModeActive)
+        snprintf(leftFooter, sizeof(leftFooter), "WINTER 100A");
     else snprintf(leftFooter, sizeof(leftFooter), "R=RES  I=INV");
     ui.drawString(leftFooter, 5, screenH - 7);
     ui.setTextDatum(middle_right);
@@ -2497,8 +3241,11 @@ void setup() {
     Serial.begin(115200);
     delay(300);
     config.load();
+    loadWinterModePreference();
     if (!AppConfig::storageSelfTest()) {
         config.dryRun = true;
+        winterModeActive = false;
+        winterModePreference = false;
         for (auto& inverter : config.inverters) inverter.enabled = false;
         Serial.println("FATAL configuration CRC self-test failed; inverter control disabled");
     }

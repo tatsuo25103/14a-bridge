@@ -1,4 +1,5 @@
 .venv/
+.platformio/
 __pycache__/
 *.py[cod]
 .pio/

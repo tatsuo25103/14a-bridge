@@ -17,7 +17,7 @@ FC03-Rücklesen. Unveränderte Sollwerte werden nicht ständig neu geschrieben.
 > Vorgaben des Netzbetreibers noch Abnahme oder Zertifizierung.
 
 [Neueste Version herunterladen](https://github.com/tatsuo25103/14a-bridge/releases/latest)
-· [V1.0.9 Versionshinweise](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.9.de.md)
+· [V1.1.0 Versionshinweise](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.1.0.de.md)
 · [Ausführliche technische Referenz](stamplc_14a_bridge/README.md)
 
 ## 1. Installation
@@ -42,7 +42,7 @@ FC03-Rücklesen. Unveränderte Sollwerte werden nicht ständig neu geschrieben.
 
 ### 1.2 Windows-Anwendung installieren
 
-1. `14a_Bridge_Setup_V1.0.9.exe` aus den
+1. `14a_Bridge_Setup_V1.1.0.exe` aus den
    [GitHub Releases](https://github.com/tatsuo25103/14a-bridge/releases/latest)
    laden.
 2. Setup starten und optional die Desktop-Verknüpfung anlegen.
@@ -115,7 +115,7 @@ er wird nicht an PORT.C angeschlossen.
 
 ### 1.4 Erstinbetriebnahme
 
-1. Bei neuer StampPLC unter **Settings** mit **USB flash V1.0.9** Bootloader,
+1. Bei neuer StampPLC unter **Settings** mit **USB flash V1.1.0** Bootloader,
    OTA-Partitionen und Firmware installieren. Versorgung nicht unterbrechen.
 2. **Read SmartPLC settings** ausführen.
 3. RSE-Profil und RS485 (`19200`, Register `0x04E5` für die geprüften
@@ -150,7 +150,7 @@ ist lesend und speichert erst nach ausdrücklichem **Save inverter settings**.
 | **Enable automatic OTA** | Aktiviert die geplante Firmwareprüfung der StampPLC. |
 | **Save OTA time** | Setzt den Beginn des täglichen 60-Minuten-Wartungsfensters; Standard `01:00` Europe/Berlin. |
 | **Sync clock from PC** | Stellt die RTC; bei WLAN erfolgt zusätzlich tägliche NTP-Synchronisation. |
-| **USB flash V1.0.9** | Installiert das mitgelieferte Firmwarepaket mit Fortschritt und Schreibprüfung. |
+| **USB flash V1.1.0** | Installiert das mitgelieferte Firmwarepaket mit Fortschritt und Schreibprüfung. |
 | **Check SmartPLC update** | Prüft signierte SmartPLC-Updates; bei neuer Version folgt eine Bestätigungsfrage. |
 
 #### PlexLog-Gateway in der PC-Anwendung aktivieren
@@ -188,6 +188,35 @@ meldet PlexLog absichtlich eine unterbrochene Wechselrichterkommunikation.
 Am LCD bedeutet **LIVE** grün, **TEST** gelb und **OTA** blau. Fehlerhafte
 Wechselrichter werden vollständig rot dargestellt. Die Firmware liest
 regelmäßig nur den Status; sie schreibt nicht fortlaufend unveränderte Werte.
+
+### 2.3 Normal- und Winter-/Notbetrieb
+
+![Winterbetrieb in der PC-Anwendung](stamplc_14a_bridge/docs/user_manual_assets/winter_mode_gui.png)
+
+| Bedienung an der SmartPLC | Wirkung |
+|---|---|
+| **A fünf Sekunden halten** | Schaltet alle konfigurierten und erreichbaren Wechselrichter in den Normalbetrieb. |
+| **C fünf Sekunden halten** | Schaltet alle konfigurierten und erreichbaren Wechselrichter in den Winter-/Notbetrieb. |
+| **B während des Countdowns** | Bricht den Vorgang ab. |
+| **A+C fünf Sekunden halten, B nicht drücken** | Fordert den lokalen Firmware-Rollback an; dies ist eine getrennte Servicefunktion. |
+
+Im Normalbetrieb wird zuerst die AC-Ladung gesperrt und anschließend der
+maximale AC-Ladestrom auf 3 A gesetzt. Im Winter-/Notbetrieb wird zuerst der
+Strom auf 100 A je Wechselrichter gesetzt und erst danach die AC-Ladung
+freigegeben. Jeder Registerwert wird gelesen, nur bei Bedarf geschrieben und
+anschließend erneut gelesen. Die Anzeige unterscheidet Wechselrichterfortschritt
+und Arbeitsschritt, zum Beispiel `INVERTER 1/2 · STEP 1/6`.
+
+Das Ergebnis wird pro Wechselrichter gespeichert: Erfolgreiche Geräte zeigen
+den Winterstatus mit Schneemann weiter an, auch wenn ein anderes Gerät offline
+ist. Mit derselben Taste kann nur der fehlgeschlagene Teil erneut versucht
+werden. Eine offline geschaltete Anlage bleibt konfiguriert und wird nicht
+automatisch entfernt.
+
+> [!CAUTION]
+> Vor der Bedienung SolarPower und andere Programme schließen, die den
+> SmartPLC-COM-Port öffnen. Das Öffnen des Ports mit DTR/RTS kann die SmartPLC
+> zurücksetzen und wie wiederholtes Schreiben oder Neustarten aussehen.
 
 ## 3. Steuerlogik
 
@@ -298,10 +327,10 @@ allein ist keine elektrische Abnahme oder rechtliche Zertifizierung.
 
 ## 6. Versionen
 
-V1.0.9 ergänzt das getrennte PlexLog-Gateway über PORT.C, priorisierte
-Bus-Arbitrierung, exakte Lese-Caches und Diagnose je Wechselrichter. PlexLog
-und SmartPLC arbeiten dadurch nicht mehr als zwei Master auf demselben
-P17-Bus. Details stehen in den
-[V1.0.9 Versionshinweisen](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.0.9.de.md).
+V1.1.0 ergänzt den verifizierten Normal- und Winter-/Notbetrieb über die
+SmartPLC-Tasten A und C, eine sichere Registerreihenfolge, Fortschritt je
+Wechselrichter und getrennte Teilergebnisse bei offline Geräten. Details stehen
+in den
+[V1.1.0 Versionshinweisen](stamplc_14a_bridge/docs/RELEASE_NOTES_V1.1.0.de.md).
 Frühere Versionen bleiben auf der
 [Release-Seite](https://github.com/tatsuo25103/14a-bridge/releases) verfügbar.

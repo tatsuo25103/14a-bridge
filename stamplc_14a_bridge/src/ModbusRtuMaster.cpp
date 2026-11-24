@@ -9,6 +9,10 @@ constexpr uint8_t FC_WRITE_MULTIPLE = 0x10;
 // slower inverter without issuing another write.
 constexpr uint32_t POWER_VERIFY_INITIAL_SETTLE_MS = 140;
 constexpr uint32_t POWER_VERIFY_RECHECK_SETTLE_MS = 160;
+// Bit-command registers can commit more slowly than ordinary holding
+// registers. Poll once more before sending the command again so a slow P17
+// does not receive avoidable duplicate 0x0007 writes.
+constexpr uint32_t BIT_VERIFY_RECHECK_SETTLE_MS = 500;
 }
 
 ModbusRtuMaster::ModbusRtuMaster(HardwareSerial& serial, int8_t rxPin,
@@ -239,6 +243,8 @@ ModbusResult ModbusRtuMaster::writeBitCommandAndVerify(
     bool expectedSet, uint32_t timeoutMs, uint8_t retries) {
     ModbusResult result;
     if (retries == 0) retries = 1;
+    bool anyCommunication = false;
+    String lastDetail = "no bit-command attempt completed";
     for (uint8_t attempt = 0; attempt < retries; ++attempt) {
         // P17 bit fields use protocol-defined enable/disable command words
         // rather than a replacement value. Register 0x0007 bit 13, for
@@ -263,16 +269,33 @@ ModbusResult ModbusRtuMaster::writeBitCommandAndVerify(
                 ackTimeoutMs, ackDetail);
         responsiveDelay(300 + attempt * 250);
 
-        result = readRaw(slave, address, 1, timeoutMs);
-        if (result.ok && ((result.value & bitMask) != 0) == expectedSet) {
-            result.detail = "bit command and FC03 readback verified on attempt " +
-                            String(attempt + 1) + "/" + String(retries);
-            return result;
+        for (uint8_t verifyPoll = 0; verifyPoll < 2; ++verifyPoll) {
+            result = readRaw(slave, address, 1, timeoutMs);
+            anyCommunication = anyCommunication || result.communicationOk;
+            if (result.ok && ((result.value & bitMask) != 0) == expectedSet) {
+                result.detail = "bit command and FC03 readback verified on attempt " +
+                                String(attempt + 1) + "/" + String(retries) +
+                                " poll " + String(verifyPoll + 1) + "/2";
+                return result;
+            }
+            if (verifyPoll == 0 && result.ok)
+                responsiveDelay(BIT_VERIFY_RECHECK_SETTLE_MS);
+            else
+                break;
+        }
+        if (result.ok) {
+            lastDetail = "readback 0x" + String(result.value, HEX) +
+                         " still has bit 0x" + String(bitMask, HEX) +
+                         (expectedSet ? " clear" : " set");
+        } else {
+            lastDetail = result.detail;
+            if (!ackDetail.isEmpty()) lastDetail += "; ACK: " + ackDetail;
         }
         if (attempt + 1 < retries) responsiveDelay(500 + attempt * 250);
     }
     result.ok = false;
+    result.communicationOk = anyCommunication;
     result.detail = "bit command not verified after " + String(retries) +
-                    " attempts: " + result.detail;
+                    " attempts: " + lastDetail;
     return result;
 }

@@ -77,7 +77,7 @@ address, data format, byte order, and write/readback behaviour before use.
 ## 1.2 Install the Windows application
 
 1. Open the [latest GitHub release](https://github.com/tatsuo25103/14a-bridge/releases).
-2. Download `14a_Bridge_Setup_V1.0.9.exe`.
+2. Download `14a_Bridge_Setup_V1.1.0.exe`.
 3. Run the installer and start **14a Bridge - USB Configurator**.
 4. Connect the StampPLC to the PC with a USB Type-C **data** cable.
 
@@ -185,7 +185,7 @@ firmware, or a device that must receive the current USB firmware package.
 
 1. Select its COM port.
 2. Open **SETTINGS**.
-3. Click **USB flash V1.0.9**.
+3. Click **USB flash V1.1.0**.
 4. Confirm the selected port.
 5. Keep USB power connected until the circular indicator reaches `100%` and
    the GUI reports `Complete & verified`.
@@ -338,7 +338,7 @@ capped.
 
 | Control | Function |
 |---|---|
-| **USB flash V1.0.9** | Installs the bundled firmware through USB and verifies the written flash. Intended for first installation, recovery, or migration to the OTA partition layout. Keep power connected. |
+| **USB flash V1.1.0** | Installs the bundled firmware through USB and verifies the written flash. Intended for first installation, recovery, or migration to the OTA partition layout. Keep power connected. |
 | **Check SmartPLC update** | Asks the SmartPLC to check GitHub. If a newer firmware is available, the GUI asks whether to install it. If none is available, no installation occurs. |
 | **Installed firmware** | Shows the version reported by the connected controller. |
 | **Circular progress indicator** | Shows preparation, write/download percentage, verification, completion, or failure. |
@@ -361,6 +361,35 @@ all enabled inverters verified at target. An unsafe request keeps the current
 firmware without reboot. A successful local rollback disables automatic OTA
 until it is explicitly enabled again in the GUI.
 
+### Normal and Winter/Emergency Mode
+
+| Gesture | Function |
+|---|---|
+| **Hold A for 5 seconds** | Apply and verify **Normal Mode** on every enabled inverter. |
+| **Hold C for 5 seconds** | Apply and verify **Winter/Emergency Mode** on every enabled inverter. |
+| **Hold A+C for 5 seconds** | Request local firmware rollback. |
+| **Press B during a hold** | Cancel the current countdown or mode request. |
+
+Normal Mode clears Register `0x0007` bit 14 before verifying Register
+`0x011F = 30` (3.0 A). Winter Mode first verifies
+`0x011F = 1000` (100.0 A per inverter), then sets Register `0x0007` bit 14.
+Both registers are read before action and read back after a required change.
+Values already correct are not rewritten.
+
+The LCD progress screen separates inverter count from transaction count, for
+example `INVERTER 1/2  STEP 1/6`. A snowman is shown independently on every
+inverter that has verified Winter Mode. If one enabled inverter is offline,
+successful units keep their state and animation; holding the same mode key
+again retries devices that are not yet verified.
+
+![Winter Mode indication in the Windows GUI](docs/user_manual_assets/winter_mode_gui.png)
+
+> [!CAUTION]
+> Close SolarPower and other automatic COM-port scanners before connecting the
+> Configurator. A third-party application that opens the SmartPLC COM port and
+> toggles DTR/RTS can reset the controller. Do not assign SolarPower and
+> SmartPLC to the same USB COM port.
+
 ## 2.3 COMMISSIONING tab
 
 ### Live display
@@ -368,12 +397,13 @@ until it is explicitly enabled again in the GUI.
 | Item | Meaning |
 |---|---|
 | **RSE** | Physical input level and raw DI mask. `INVALID` means the selected profile does not accept the current combination. |
-| **Mode** | `LIVE` in green for physical RSE control, `TEST` in amber for a temporary GUI test, or `OTA` in blue while updating. |
+| **Mode** | `LIVE` in green for physical RSE control, `TEST` in amber for a temporary GUI test, `WINTER` in cyan for verified AC-charge mode, or `OTA` in blue while updating. |
 | **Output** | Last applied output result and its source. `UNCHANGED` means the previous verified inverter setting was deliberately retained. |
 | **Dashed line** | RSE/RES target percentage for the tile. |
 | **Liquid fill** | Current inverter readback level. Its color follows the active RSE percentage. |
 | **Tile value** | Current inverter value in kW. |
 | **Tile border/status** | Normal status, amber transient warning, or full red tile after a confirmed inverter fault. |
+| **Snowman** | This inverter has individually verified Winter Mode. No snowman means Normal, unknown, or failed verification. |
 
 The same tank-style display is shown on the StampPLC LCD. The layout adapts
 automatically to one through six enabled inverters.
@@ -553,6 +583,19 @@ Maintainers must follow the [production release checklist](docs/RELEASE_PROCESS.
 ---
 
 # 4. Release history
+
+## V1.1.0 — Verified Normal/Winter Mode
+
+- Added separate five-second A=Normal and C=Winter gestures; B cancels.
+- Added read-before-write and readback verification for Register `0x0007`
+  bit 14 and AC-current Register `0x011F`.
+- Added independent per-inverter success state, retry behavior and snowman
+  animation.
+- Added an LCD progress overlay that distinguishes inverter count from
+  transaction steps.
+- Added a SolarPower/COM-port reset warning.
+
+See [V1.1.0 release notes](docs/RELEASE_NOTES_V1.1.0.md).
 
 ## V1.0.9 — Separate PlexLog gateway and collision-free arbitration
 
